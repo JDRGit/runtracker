@@ -1,18 +1,30 @@
 "use client"
 
 import { useState } from 'react'
+import { v4 as uuidv4 } from 'uuid'
 
 export default function LogRunForm({ onLog }) {
   const [date, setDate] = useState('')
   const [distance, setDistance] = useState('')
   const [time, setTime] = useState('')
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
-    onLog({ date, distance, time })
-    setDate('')
-    setDistance('')
-    setTime('')
+    const newRun = { id: uuidv4(), date, distance, time }
+    const response = await fetch('/api/runs', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(newRun),
+    })
+    if (response.ok) {
+      const savedRun = await response.json()
+      onLog(savedRun)
+      setDate('')
+      setDistance('')
+      setTime('')
+    }
   }
 
   return (

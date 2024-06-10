@@ -1,17 +1,20 @@
 # RunTracker
 
-RunTracker is a web application built with Next.js and Tailwind CSS for logging and tracking running activities. The application allows users to log their runs, including the date, distance, and time, and view a list of their logged runs.
+RunTracker is a web application built with Next.js and Tailwind CSS for logging and tracking running activities. The application allows users to log their runs, including the date, distance, and time, view a list of their logged runs, and delete any logged runs.
 
 ## Features
 
-- Log running activities with date, distance, and time
-- View a list of logged runs
-- Responsive design using Tailwind CSS
+- Log running activities with date, distance, and time.
+- View a list of logged runs.
+- Delete any logged run.
+- Responsive design using Tailwind CSS.
 
 ## Technologies Used
 
 - [Next.js](https://nextjs.org/)
 - [Tailwind CSS](https://tailwindcss.com/)
+- [uuid](https://www.npmjs.com/package/uuid)
+
 
 ## Getting Started
 
