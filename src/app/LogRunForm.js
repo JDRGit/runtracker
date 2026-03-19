@@ -1,70 +1,143 @@
-"use client"
+"use client";
 
-import { useState } from 'react'
-import { v4 as uuidv4 } from 'uuid'
+import { useState } from "react";
+import { RUN_LIMITS, formatPace, getTodayDateInputValue } from "@/lib/runs";
 
-export default function LogRunForm({ onLog }) {
-  const [date, setDate] = useState('')
-  const [distance, setDistance] = useState('')
-  const [time, setTime] = useState('')
+function createInitialFormState() {
+  return {
+    date: getTodayDateInputValue(),
+    distance: "",
+    durationMinutes: "",
+    notes: "",
+  };
+}
 
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    const newRun = { id: uuidv4(), date, distance, time }
-    const response = await fetch('/api/runs', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(newRun),
-    })
-    if (response.ok) {
-      const savedRun = await response.json()
-      onLog(savedRun)
-      setDate('')
-      setDistance('')
-      setTime('')
+export default function LogRunForm({ onCreateRun }) {
+  const [formData, setFormData] = useState(createInitialFormState);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const estimatedPace =
+    Number(formData.distance) > 0 && Number(formData.durationMinutes) > 0
+      ? formatPace(Number(formData.durationMinutes) / Number(formData.distance))
+      : "--";
+
+  const handleChange = (event) => {
+    const { name, value } = event.target;
+    setFormData((current) => ({
+      ...current,
+      [name]: value,
+    }));
+  };
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    setErrorMessage("");
+    setIsSubmitting(true);
+
+    try {
+      await onCreateRun(formData);
+      setFormData(createInitialFormState());
+    } catch (error) {
+      setErrorMessage(error.message || "Could not save that run.");
+    } finally {
+      setIsSubmitting(false);
     }
-  }
+  };
 
   return (
-    <form onSubmit={handleSubmit} className="bg-white p-4 rounded shadow-md">
-      <div className="mb-4">
-        <label className="block text-gray-700">Date</label>
+    <form className="space-y-5" onSubmit={handleSubmit}>
+      <div>
+        <label className="field-label" htmlFor="date">
+          Date
+        </label>
         <input
+          className="field-input"
+          id="date"
+          name="date"
+          onChange={handleChange}
+          required
           type="date"
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-          className="mt-1 p-2 w-full border rounded"
-          required
+          value={formData.date}
         />
       </div>
-      <div className="mb-4">
-        <label className="block text-gray-700">Distance (km)</label>
-        <input
-          type="number"
-          value={distance}
-          onChange={(e) => setDistance(e.target.value)}
-          className="mt-1 p-2 w-full border rounded"
-          required
+
+      <div className="grid gap-5 sm:grid-cols-2">
+        <div>
+          <label className="field-label" htmlFor="distance">
+            Distance (km)
+          </label>
+          <input
+            className="field-input"
+            id="distance"
+            max={RUN_LIMITS.maxDistanceKm}
+            min="0.1"
+            name="distance"
+            onChange={handleChange}
+            placeholder="8.5"
+            required
+            step="0.1"
+            type="number"
+            value={formData.distance}
+          />
+        </div>
+
+        <div>
+          <label className="field-label" htmlFor="durationMinutes">
+            Time (minutes)
+          </label>
+          <input
+            className="field-input"
+            id="durationMinutes"
+            max={RUN_LIMITS.maxDurationMinutes}
+            min="1"
+            name="durationMinutes"
+            onChange={handleChange}
+            placeholder="46"
+            required
+            step="1"
+            type="number"
+            value={formData.durationMinutes}
+          />
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3">
+        <p className="text-xs font-semibold uppercase tracking-[0.22em] text-amber-800/80">
+          Pace preview
+        </p>
+        <p className="mt-2 text-lg font-semibold text-slate-950">{estimatedPace}</p>
+      </div>
+
+      <div>
+        <div className="mb-2 flex items-center justify-between gap-4">
+          <label className="field-label mb-0" htmlFor="notes">
+            Notes
+          </label>
+          <span className="text-xs text-slate-500">
+            {formData.notes.length}/{RUN_LIMITS.maxNotesLength}
+          </span>
+        </div>
+        <textarea
+          className="field-input field-textarea"
+          id="notes"
+          maxLength={RUN_LIMITS.maxNotesLength}
+          name="notes"
+          onChange={handleChange}
+          placeholder="Optional details: easy effort, intervals, trail route..."
+          value={formData.notes}
         />
       </div>
-      <div className="mb-4">
-        <label className="block text-gray-700">Time (minutes)</label>
-        <input
-          type="number"
-          value={time}
-          onChange={(e) => setTime(e.target.value)}
-          className="mt-1 p-2 w-full border rounded"
-          required
-        />
-      </div>
-      <button
-        type="submit"
-        className="bg-blue-500 text-white p-2 rounded hover:bg-blue-600"
-      >
-        Log Run
+
+      {errorMessage ? (
+        <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          {errorMessage}
+        </p>
+      ) : null}
+
+      <button className="primary-button w-full" disabled={isSubmitting} type="submit">
+        {isSubmitting ? "Saving..." : "Save run"}
       </button>
     </form>
-  )
+  );
 }
