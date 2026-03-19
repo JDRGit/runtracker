@@ -2,6 +2,10 @@
 
 RunTracker is a small Next.js app for logging runs and reviewing your training history. It stores run entries in `data/runs.json`, calculates pace automatically, and surfaces useful summary stats on the dashboard.
 
+## Live Demo
+
+[https://runtracker-by-jdr.netlify.app/](https://runtracker-by-jdr.netlify.app/)
+
 ## Features
 
 - Log runs with date, distance, duration, and optional notes.
