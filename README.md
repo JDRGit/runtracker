@@ -27,7 +27,7 @@ RunTracker is a small Next.js app for logging runs and reviewing your training h
 
 ### Prerequisites
 
-- Node.js 18.17 or newer
+- Node.js 18.18 or newer
 - npm 9 or newer
 
 ### Installation
