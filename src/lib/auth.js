@@ -1,3 +1,4 @@
+import { passkey } from "@better-auth/passkey";
 import { betterAuth } from "better-auth";
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { nextCookies } from "better-auth/next-js";
@@ -14,6 +15,14 @@ function getEnv(name) {
 
 function getConfiguredAuthUrl() {
   return getEnv("BETTER_AUTH_URL") || getEnv("URL") || FALLBACK_AUTH_URL;
+}
+
+function getConfiguredAuthUrlObject() {
+  try {
+    return new URL(getConfiguredAuthUrl());
+  } catch {
+    return new URL(FALLBACK_AUTH_URL);
+  }
 }
 
 function getDatabaseUrl() {
@@ -84,6 +93,8 @@ function getAuthDatabase() {
 let authInstance = null;
 
 function createAuth() {
+  const authUrl = getConfiguredAuthUrlObject();
+
   return betterAuth({
     advanced: {
       cookiePrefix: "runtracker",
@@ -91,7 +102,21 @@ function createAuth() {
     basePath: "/api/auth",
     baseURL: getConfiguredAuthUrl(),
     database: getAuthDatabase(),
-    plugins: [nextCookies()],
+    plugins: [
+      nextCookies(),
+      passkey({
+        advanced: {
+          webAuthnChallengeCookie: "runtracker-passkey",
+        },
+        authenticatorSelection: {
+          residentKey: "preferred",
+          userVerification: "preferred",
+        },
+        origin: authUrl.origin,
+        rpID: authUrl.hostname,
+        rpName: "RunTracker",
+      }),
+    ],
     secret: getAuthSecret(),
     socialProviders: getGoogleProviderConfig(),
   });

@@ -5,6 +5,7 @@ import { authClient } from "@/lib/auth-client";
 import AuthPanel from "./AuthPanel";
 import ClientLayout from "./ClientLayout";
 import LogRunForm from "./LogRunForm";
+import PasskeyPanel from "./PasskeyPanel";
 import RunList from "./RunList";
 import {
   formatDistance,
@@ -24,11 +25,23 @@ async function getResponseError(response, fallbackMessage) {
   }
 }
 
+function getAuthActionError(error, fallbackMessage) {
+  const code = typeof error?.code === "string" ? error.code : "";
+
+  if (code === "AUTH_CANCELLED" || code === "ERROR_CEREMONY_ABORTED") {
+    return "The authentication prompt was cancelled.";
+  }
+
+  const message = typeof error?.message === "string" ? error.message.trim() : "";
+  return message || fallbackMessage;
+}
+
 export default function RunTrackerApp() {
   const { data: sessionData, error: sessionError, isPending: isCheckingSession } = authClient.useSession();
   const [authError, setAuthError] = useState("");
   const [authorizationError, setAuthorizationError] = useState("");
-  const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [isAuthenticatingWithGoogle, setIsAuthenticatingWithGoogle] = useState(false);
+  const [isAuthenticatingWithPasskey, setIsAuthenticatingWithPasskey] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [runs, setRuns] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -97,10 +110,28 @@ export default function RunTrackerApp() {
     loadRuns();
   }, [user?.id]);
 
-  const handleAuthenticate = async () => {
+  const handleAuthenticateWithPasskey = async () => {
     setAuthError("");
     setAuthorizationError("");
-    setIsAuthenticating(true);
+    setIsAuthenticatingWithPasskey(true);
+
+    try {
+      const result = await authClient.signIn.passkey();
+
+      if (result.error) {
+        throw new Error(getAuthActionError(result.error, "Could not sign in with your passkey."));
+      }
+    } catch (error) {
+      setAuthError(getAuthActionError(error, "Could not sign in with your passkey."));
+    } finally {
+      setIsAuthenticatingWithPasskey(false);
+    }
+  };
+
+  const handleAuthenticateWithGoogle = async () => {
+    setAuthError("");
+    setAuthorizationError("");
+    setIsAuthenticatingWithGoogle(true);
 
     try {
       await authClient.signIn.social({
@@ -110,7 +141,7 @@ export default function RunTrackerApp() {
     } catch (error) {
       setAuthError(error.message || "Could not start Google sign-in.");
     } finally {
-      setIsAuthenticating(false);
+      setIsAuthenticatingWithGoogle(false);
     }
   };
 
@@ -210,10 +241,12 @@ export default function RunTrackerApp() {
       <ClientLayout user={user}>
         <AuthPanel
           errorMessage={authorizationError || authError}
-          isAuthenticating={isAuthenticating}
+          isAuthenticatingWithGoogle={isAuthenticatingWithGoogle}
+          isAuthenticatingWithPasskey={isAuthenticatingWithPasskey}
           isCheckingSession={isCheckingSession}
           isForbidden={Boolean(authorizationError)}
-          onAuthenticate={handleAuthenticate}
+          onAuthenticateWithGoogle={handleAuthenticateWithGoogle}
+          onAuthenticateWithPasskey={handleAuthenticateWithPasskey}
           onSignOut={user ? handleSignOut : null}
           user={user}
         />
@@ -317,15 +350,21 @@ export default function RunTrackerApp() {
       </section>
 
       <section className="mt-6 grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
-        <div className="glass-panel">
-          <div className="mb-6">
-            <p className="eyebrow">New entry</p>
-            <h3 className="section-title mt-3">Log a run</h3>
-            <p className="section-copy mt-2">
-              Capture the date, distance, and total time. Pace is calculated automatically.
-            </p>
+        <div className="space-y-6">
+          <div className="glass-panel">
+            <div className="mb-6">
+              <p className="eyebrow">New entry</p>
+              <h3 className="section-title mt-3">Log a run</h3>
+              <p className="section-copy mt-2">
+                Capture the date, distance, and total time. Pace is calculated automatically.
+              </p>
+            </div>
+            <LogRunForm onCreateRun={handleCreateRun} />
           </div>
-          <LogRunForm onCreateRun={handleCreateRun} />
+
+          <div className="glass-panel">
+            <PasskeyPanel />
+          </div>
         </div>
 
         <div className="glass-panel">

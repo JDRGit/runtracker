@@ -8,7 +8,7 @@ Live demo: [https://runtracker-by-jdr.netlify.app/](https://runtracker-by-jdr.ne
 
 The app no longer uses a shared admin token.
 
-Authentication is now handled by Better Auth with Google OAuth, and run data is scoped to the signed-in user. In production, access is restricted by `ALLOWED_USER_EMAILS`, so a Google login is not enough by itself unless the email is on the allowlist.
+Authentication is now handled by Better Auth with passkeys plus Google OAuth fallback, and run data is scoped to the signed-in user. In production, access is restricted by `ALLOWED_USER_EMAILS`, so registration and sign-in still require an allowed account.
 
 ## Tech Stack
 
@@ -36,11 +36,13 @@ The project is split into four layers:
 The main dashboard is rendered by `src/app/RunTrackerApp.js`.
 
 - It uses Better Auth's React client to read the current session.
-- It starts Google sign-in from the browser.
+- It starts passkey sign-in from the browser.
+- It keeps Google sign-in as the bootstrap and recovery path for registering a first passkey.
 - It loads runs from `GET /api/runs` after a valid session exists.
 - It posts new runs to `POST /api/runs`.
 - It deletes runs through `DELETE /api/runs`.
 - It computes display-only stats from the current in-memory run list.
+- It lets an authenticated user register and remove passkeys from the dashboard.
 
 Important client files:
 
@@ -49,6 +51,7 @@ Important client files:
 - `src/app/LogRunForm.js`
 - `src/app/RunList.js`
 - `src/app/ClientLayout.js`
+- `src/app/PasskeyPanel.js`
 - `src/lib/auth-client.js`
 - `src/lib/runs.js`
 
@@ -57,7 +60,9 @@ Important client files:
 Better Auth is configured in `src/lib/auth.js`.
 
 - The auth route handler lives at `src/app/api/auth/[...all]/route.js`.
+- The passkey plugin is enabled with the relying-party ID and origin derived from `BETTER_AUTH_URL`.
 - Google OAuth is enabled when `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `BETTER_AUTH_SECRET` are present.
+- Passkey registration and passkey sign-in are enabled through `@better-auth/passkey`.
 - The backend uses `auth.api.getSession()` to resolve the signed-in user inside `src/pages/api/runs.js` and `src/pages/api/health.js`.
 - Production access is restricted by `ALLOWED_USER_EMAILS`.
 
@@ -91,11 +96,28 @@ The run storage abstraction is in `src/lib/runStore.js`.
 
 1. The user opens the app.
 2. `RunTrackerApp` reads the Better Auth session with `authClient.useSession()`.
-3. If no session exists, the app shows a Google sign-in button.
-4. The button calls Better Auth social sign-in for `google`.
-5. After the OAuth callback, Better Auth creates the session and stores the auth data in the database.
-6. The app then loads runs through `/api/runs`.
-7. The backend checks both authentication and the `ALLOWED_USER_EMAILS` allowlist before returning data.
+3. If no session exists, the app shows passkey sign-in first and Google as fallback.
+4. If the user already registered a passkey, Better Auth completes WebAuthn authentication and restores the session without a password.
+5. If the user has not registered a passkey yet, they use Google once, then add a passkey from the dashboard.
+6. Better Auth stores the auth data in the database.
+7. The app then loads runs through `/api/runs`.
+8. The backend checks both authentication and the `ALLOWED_USER_EMAILS` allowlist before returning data.
+
+## Passwordless Authentication Flow
+
+RunTracker now supports real passwordless sign-in through passkeys.
+
+- A first-time user signs in with Google.
+- Once signed in, the dashboard exposes a passkey management panel.
+- The user saves a passkey tied to the current Better Auth account.
+- On future visits, the sign-in screen can authenticate directly with that passkey.
+- Google remains available as a recovery path if a passkey is lost or the user is on a new device.
+
+Passkeys require a secure origin, which means:
+
+- `http://localhost` during local development is valid
+- deployed environments must use HTTPS
+- `BETTER_AUTH_URL` must match the deployed origin used for passkey registration and sign-in
 
 ## Run Data Ownership
 
@@ -159,6 +181,8 @@ Important behavior:
 - session lookup
 - OAuth sign-in start
 - OAuth callback handling
+- passkey registration
+- passkey authentication
 - sign-out
 
 You do not need to create manual handlers for those endpoints.
@@ -207,6 +231,12 @@ The repo now has two migration files:
 - run ownership: `runs.user_id`
 - supporting indexes for auth and run queries
 
+`003_add_passkey_support.sql` adds:
+
+- the `passkey` table required by `@better-auth/passkey`
+- an index on `passkey."userId"`
+- a unique index on `passkey."credentialID"`
+
 Apply migrations with:
 
 ```bash
@@ -245,6 +275,13 @@ npm run db:migrate
 npm run dev
 ```
 
+5. Bootstrap your first passkey:
+
+- sign in with Google
+- open the Passkeys panel in the dashboard
+- add a passkey for the current browser, device, or security key
+- sign out and test passkey sign-in from the landing screen
+
 ## Deployment On Netlify
 
 1. Connect the repo to Netlify.
@@ -256,6 +293,12 @@ npm run dev
 7. Set `ALLOWED_USER_EMAILS`.
 8. Deploy.
 9. Run `npm run db:migrate` against the database if the schema has not been applied yet.
+
+For passwordless auth to work on the deployed site, make sure:
+
+- `BETTER_AUTH_URL` exactly matches the public site origin
+- the site is served over HTTPS
+- `003_add_passkey_support.sql` has been applied
 
 ## Troubleshooting
 
