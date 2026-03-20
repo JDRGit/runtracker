@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "db:import": "node scripts/import-runs.mjs",
+    "db:migrate": "node scripts/apply-migrations.mjs",
     "start": "next start",
     "lint": "eslint ."
   },

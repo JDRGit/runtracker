@@ -14,6 +14,7 @@ RunTracker is a small Next.js app for logging runs and reviewing your training h
 - Delete saved runs from the dashboard.
 - Validate run input in both the UI and the API.
 - Persist deployed run data in Netlify DB instead of the read-only function filesystem.
+- Expose a small `/api/health` endpoint for storage connectivity checks.
 - Lint the project with ESLint and `next/core-web-vitals`.
 
 ## Technologies Used
@@ -61,6 +62,14 @@ npm run dev
 ```bash
 npm run dev
 npm run build
+npm run db:import
+npm run db:migrate
 npm run start
 npm run lint
 ```
+
+## Database Utilities
+
+- `GET /api/health` returns a basic application and database health payload.
+- `npm run db:migrate` applies SQL files from `db/migrations` using `NETLIFY_DATABASE_URL`.
+- `npm run db:import` imports `data/runs.json` into the `runs` table. You can also pass a custom JSON path: `npm run db:import -- ./path/to/runs.json`.
