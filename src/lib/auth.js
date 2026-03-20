@@ -25,6 +25,10 @@ function getConfiguredAuthUrlObject() {
   }
 }
 
+function getConfiguredAuthBaseUrl() {
+  return getConfiguredAuthUrlObject().origin;
+}
+
 function getDatabaseUrl() {
   return getEnv("NETLIFY_DATABASE_URL") || getEnv("DATABASE_URL") || FALLBACK_DATABASE_URL;
 }
@@ -100,7 +104,7 @@ function createAuth() {
       cookiePrefix: "runtracker",
     },
     basePath: "/api/auth",
-    baseURL: getConfiguredAuthUrl(),
+    baseURL: getConfiguredAuthBaseUrl(),
     database: getAuthDatabase(),
     plugins: [
       nextCookies(),
