@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { authClient } from "@/lib/auth-client";
 import AuthPanel from "./AuthPanel";
 import ClientLayout from "./ClientLayout";
 import LogRunForm from "./LogRunForm";
@@ -24,57 +25,60 @@ async function getResponseError(response, fallbackMessage) {
 }
 
 export default function RunTrackerApp() {
-  const [authStatus, setAuthStatus] = useState("checking");
+  const { data: sessionData, error: sessionError, isPending: isCheckingSession } = authClient.useSession();
   const [authError, setAuthError] = useState("");
+  const [authorizationError, setAuthorizationError] = useState("");
   const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [isSigningOut, setIsSigningOut] = useState(false);
   const [runs, setRuns] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [listError, setListError] = useState("");
   const [activeDeleteId, setActiveDeleteId] = useState("");
+  const session = sessionData ?? null;
+  const user = session?.user ?? null;
 
   useEffect(() => {
-    const checkSession = async () => {
-      try {
-        const response = await fetch("/api/session", {
-          cache: "no-store",
-        });
+    if (!sessionError) {
+      return;
+    }
 
-        if (!response.ok) {
-          throw new Error(await getResponseError(response, "Could not verify your session."));
-        }
-
-        const data = await response.json();
-        setAuthStatus(data.authenticated ? "authenticated" : "unauthenticated");
-      } catch (error) {
-        setAuthError(error.message || "Could not verify your session.");
-        setAuthStatus("unauthenticated");
-      }
-    };
-
-    checkSession();
-  }, []);
+    setAuthError(sessionError.message || "Could not verify your session.");
+  }, [sessionError]);
 
   useEffect(() => {
-    if (authStatus !== "authenticated") {
+    if (!user?.id) {
       setRuns([]);
       setIsLoading(false);
       setLoadError("");
       setListError("");
       setActiveDeleteId("");
+      setAuthorizationError("");
       return;
     }
 
     const loadRuns = async () => {
       setIsLoading(true);
       setLoadError("");
+      setAuthorizationError("");
 
       try {
-        const response = await fetch("/api/runs");
+        const response = await fetch("/api/runs", {
+          cache: "no-store",
+        });
 
         if (response.status === 401) {
-          setAuthStatus("unauthenticated");
-          throw new Error("Session expired. Sign in again.");
+          throw new Error("Your session expired. Sign in again.");
+        }
+
+        if (response.status === 403) {
+          const message = await getResponseError(
+            response,
+            "Your account is signed in, but it is not allowed to access this app.",
+          );
+          setAuthorizationError(message);
+          setRuns([]);
+          return;
         }
 
         if (!response.ok) {
@@ -91,28 +95,20 @@ export default function RunTrackerApp() {
     };
 
     loadRuns();
-  }, [authStatus]);
+  }, [user?.id]);
 
-  const handleAuthenticate = async (token) => {
+  const handleAuthenticate = async () => {
     setAuthError("");
+    setAuthorizationError("");
     setIsAuthenticating(true);
 
     try {
-      const response = await fetch("/api/session", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ token }),
+      await authClient.signIn.social({
+        callbackURL: "/",
+        provider: "google",
       });
-
-      if (!response.ok) {
-        throw new Error(await getResponseError(response, "Could not sign in."));
-      }
-
-      setAuthStatus("authenticated");
     } catch (error) {
-      setAuthError(error.message || "Could not sign in.");
+      setAuthError(error.message || "Could not start Google sign-in.");
     } finally {
       setIsAuthenticating(false);
     }
@@ -120,13 +116,18 @@ export default function RunTrackerApp() {
 
   const handleSignOut = async () => {
     setAuthError("");
+    setAuthorizationError("");
+    setIsSigningOut(true);
 
     try {
-      await fetch("/api/session", {
-        method: "DELETE",
-      });
+      await authClient.signOut();
+      setRuns([]);
+      setLoadError("");
+      setListError("");
+    } catch (error) {
+      setAuthError(error.message || "Could not sign out.");
     } finally {
-      setAuthStatus("unauthenticated");
+      setIsSigningOut(false);
     }
   };
 
@@ -140,8 +141,16 @@ export default function RunTrackerApp() {
     });
 
     if (response.status === 401) {
-      setAuthStatus("unauthenticated");
-      throw new Error("Session expired. Sign in again.");
+      throw new Error("Your session expired. Sign in again.");
+    }
+
+    if (response.status === 403) {
+      const message = await getResponseError(
+        response,
+        "Your account is signed in, but it is not allowed to access this app.",
+      );
+      setAuthorizationError(message);
+      throw new Error(message);
     }
 
     if (!response.ok) {
@@ -170,8 +179,16 @@ export default function RunTrackerApp() {
       });
 
       if (response.status === 401) {
-        setAuthStatus("unauthenticated");
-        throw new Error("Session expired. Sign in again.");
+        throw new Error("Your session expired. Sign in again.");
+      }
+
+      if (response.status === 403) {
+        const message = await getResponseError(
+          response,
+          "Your account is signed in, but it is not allowed to access this app.",
+        );
+        setAuthorizationError(message);
+        throw new Error(message);
       }
 
       if (!response.ok) {
@@ -188,14 +205,17 @@ export default function RunTrackerApp() {
 
   const stats = getRunStats(runs);
 
-  if (authStatus !== "authenticated") {
+  if (!user || authorizationError) {
     return (
-      <ClientLayout>
+      <ClientLayout user={user}>
         <AuthPanel
-          errorMessage={authError || loadError}
+          errorMessage={authorizationError || authError}
           isAuthenticating={isAuthenticating}
-          isCheckingSession={authStatus === "checking"}
+          isCheckingSession={isCheckingSession}
+          isForbidden={Boolean(authorizationError)}
           onAuthenticate={handleAuthenticate}
+          onSignOut={user ? handleSignOut : null}
+          user={user}
         />
       </ClientLayout>
     );
@@ -244,10 +264,11 @@ export default function RunTrackerApp() {
   return (
     <ClientLayout
       actions={
-        <button className="ghost-button" onClick={handleSignOut} type="button">
-          Sign out
+        <button className="ghost-button" disabled={isSigningOut} onClick={handleSignOut} type="button">
+          {isSigningOut ? "Signing out..." : "Sign out"}
         </button>
       }
+      user={user}
     >
       <section className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_360px]">
         <div className="glass-panel bg-white/80">

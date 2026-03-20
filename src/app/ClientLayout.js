@@ -1,6 +1,8 @@
 "use client";
 
-export default function ClientLayout({ actions = null, children }) {
+import Image from "next/image";
+
+export default function ClientLayout({ actions = null, children, user = null }) {
   const todayLabel = new Intl.DateTimeFormat("en-US", {
     weekday: "long",
     month: "long",
@@ -16,6 +18,22 @@ export default function ClientLayout({ actions = null, children }) {
             <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">RunTracker</h1>
           </div>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            {user ? (
+              <div className="inline-flex items-center gap-3 rounded-full border border-slate-200/80 bg-white/80 px-4 py-2 text-sm text-slate-600 shadow-sm">
+                {user.image ? (
+                  <Image
+                    alt={user.name || user.email || "Signed in user"}
+                    className="h-8 w-8 rounded-full object-cover"
+                    height={32}
+                    referrerPolicy="no-referrer"
+                    src={user.image}
+                    unoptimized
+                    width={32}
+                  />
+                ) : null}
+                <span>{user.name || user.email || "Signed in"}</span>
+              </div>
+            ) : null}
             {actions}
             <div className="inline-flex rounded-full border border-slate-200/80 bg-white/80 px-4 py-2 text-sm text-slate-600 shadow-sm">
               {todayLabel}

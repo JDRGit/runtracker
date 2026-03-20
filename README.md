@@ -1,222 +1,117 @@
 # RunTracker
 
-RunTracker is a Next.js application for logging runs, reviewing training history, and tracking simple pace-based metrics. The frontend uses the App Router, the API is implemented with Next.js API routes, and persistence works in two modes:
-
-- local development: `data/runs.json`
-- deployed environments: Netlify DB via Neon using `NETLIFY_DATABASE_URL`
-
-All API access is protected by an admin session backed by `RUNTRACKER_ADMIN_TOKEN`.
+RunTracker is a Next.js application for logging runs, reviewing training history, and tracking pace-based metrics. The UI uses the App Router, the backend uses API routes plus a Better Auth route handler, and persistence uses Netlify DB / Neon when a database URL is configured.
 
 Live demo: [https://runtracker-by-jdr.netlify.app/](https://runtracker-by-jdr.netlify.app/)
 
-## What The App Does
+## What Changed
 
-- lets a user log a run with date, distance, duration, and optional notes
-- calculates pace automatically
-- shows dashboard summaries like total distance, total time, average pace, best pace, and longest run
-- lists saved runs in reverse chronological order
-- allows deleting runs
-- exposes a health endpoint for application and database checks
-- requires sign-in before data can be viewed or changed
+The app no longer uses a shared admin token.
+
+Authentication is now handled by Better Auth with Google OAuth, and run data is scoped to the signed-in user. In production, access is restricted by `ALLOWED_USER_EMAILS`, so a Google login is not enough by itself unless the email is on the allowlist.
 
 ## Tech Stack
 
 - [Next.js](https://nextjs.org/)
 - [React](https://react.dev/)
 - [Tailwind CSS](https://tailwindcss.com/)
+- [Better Auth](https://better-auth.com/)
 - [Netlify DB](https://docs.netlify.com/build/data-and-storage/netlify-db/)
 - [Neon](https://neon.com/)
+- [pg](https://www.npmjs.com/package/pg)
 - [uuid](https://www.npmjs.com/package/uuid)
 - [ESLint](https://eslint.org/)
 
 ## Architecture Overview
 
-The project is split into three main layers:
+The project is split into four layers:
 
 1. client UI
-2. API routes
-3. persistence/storage
+2. auth
+3. API routes
+4. persistence
 
 ### Client UI
 
 The main dashboard is rendered by `src/app/RunTrackerApp.js`.
 
-- On first load, it requests `GET /api/runs`
-- It keeps the current run list in client state
-- It posts new runs to `POST /api/runs`
-- It deletes runs through `DELETE /api/runs`
-- It computes display-only stats from the current in-memory run list
+- It uses Better Auth's React client to read the current session.
+- It starts Google sign-in from the browser.
+- It loads runs from `GET /api/runs` after a valid session exists.
+- It posts new runs to `POST /api/runs`.
+- It deletes runs through `DELETE /api/runs`.
+- It computes display-only stats from the current in-memory run list.
 
-The key UI files are:
+Important client files:
 
-- `src/app/RunTrackerApp.js`: dashboard container and request orchestration
-- `src/app/LogRunForm.js`: run entry form, pace preview, submit state, error state
-- `src/app/RunList.js`: list UI, empty state, delete action, per-run display
-- `src/app/ClientLayout.js`: page shell
-- `src/lib/runs.js`: validation, sorting, formatting, stats, pace calculations
+- `src/app/RunTrackerApp.js`
+- `src/app/AuthPanel.js`
+- `src/app/LogRunForm.js`
+- `src/app/RunList.js`
+- `src/app/ClientLayout.js`
+- `src/lib/auth-client.js`
+- `src/lib/runs.js`
+
+### Auth Layer
+
+Better Auth is configured in `src/lib/auth.js`.
+
+- The auth route handler lives at `src/app/api/auth/[...all]/route.js`.
+- Google OAuth is enabled when `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `BETTER_AUTH_SECRET` are present.
+- The backend uses `auth.api.getSession()` to resolve the signed-in user inside `src/pages/api/runs.js` and `src/pages/api/health.js`.
+- Production access is restricted by `ALLOWED_USER_EMAILS`.
+
+If no database URL is present, Better Auth falls back to an in-memory adapter so local builds and basic local development still work. Production should always use a real database.
 
 ### API Layer
 
-The backend uses three API routes in `src/pages/api`:
+The app has two custom API routes in `src/pages/api`:
 
 - `src/pages/api/runs.js`
 - `src/pages/api/health.js`
-- `src/pages/api/session.js`
 
-`/api/runs` validates input, generates IDs and timestamps, applies rate limiting, requires authentication, and delegates persistence to `src/lib/runStore.js`.
+And one Better Auth route tree:
 
-`/api/health` is authenticated and performs a minimal database connectivity check.
+- `src/app/api/auth/[...all]/route.js`
 
-`/api/session` handles sign-in and sign-out by validating the admin token and setting or clearing an `HttpOnly` session cookie.
+`/api/runs` validates input, applies rate limiting, requires an authenticated and authorized user, and stores/fetches only that user's runs.
 
-### Storage Layer
+`/api/health` is also authenticated and returns a minimal database health response.
 
-The storage abstraction lives in `src/lib/runStore.js`.
+### Persistence Layer
 
-It decides which backend to use:
+The run storage abstraction is in `src/lib/runStore.js`.
 
-- If `NETLIFY_DATABASE_URL` is present, it uses Netlify DB through `@netlify/neon`
-- If not, it falls back to the local JSON file at `data/runs.json`
+- If `NETLIFY_DATABASE_URL` or `DATABASE_URL` is present, run data uses Postgres.
+- If not, run data falls back to `data/runs.json`.
+- Stored runs now include an internal `userId` owner field.
+- Existing legacy rows with `user_id IS NULL` are still readable by authenticated allowed users until you migrate them to a specific user.
 
-This keeps local development simple while making deployed writes safe on Netlify, where the bundled filesystem is read-only.
+## Authentication Flow
 
-### Authentication And Rate Limiting
+1. The user opens the app.
+2. `RunTrackerApp` reads the Better Auth session with `authClient.useSession()`.
+3. If no session exists, the app shows a Google sign-in button.
+4. The button calls Better Auth social sign-in for `google`.
+5. After the OAuth callback, Better Auth creates the session and stores the auth data in the database.
+6. The app then loads runs through `/api/runs`.
+7. The backend checks both authentication and the `ALLOWED_USER_EMAILS` allowlist before returning data.
 
-Authentication and request hardening are implemented in:
+## Run Data Ownership
 
-- `src/lib/auth.js`
-- `src/lib/rateLimit.js`
+Run records are now user-scoped.
 
-The app uses a shared admin token model:
+- New runs are written with the current session user's ID.
+- Reads only return runs owned by the current user, plus legacy rows without an owner.
+- Deletes only remove runs owned by the current user, plus legacy rows without an owner.
 
-1. the user enters the admin token in the frontend
-2. `POST /api/session` validates it against `RUNTRACKER_ADMIN_TOKEN`
-3. the server sets an `HttpOnly`, `SameSite=Strict` session cookie
-4. protected API routes require that cookie or a matching bearer token
-
-The backend also applies best-effort in-memory rate limits per route and IP.
-
-## Request Flow
-
-### Loading Runs
-
-1. `RunTrackerApp` calls `fetch("/api/runs")`
-2. `src/pages/api/runs.js` calls `getRuns()`
-3. `src/lib/runStore.js` reads from:
-   - Netlify DB if `NETLIFY_DATABASE_URL` exists
-   - `data/runs.json` otherwise
-4. The API returns a normalized, sorted run array
-5. The client stores that array in state and computes dashboard stats
-
-### Creating a Run
-
-1. The user fills out `LogRunForm`
-2. The form submits a JSON payload to `POST /api/runs`
-3. The API validates the payload with `validateRunInput()` from `src/lib/runs.js`
-4. The API creates:
-   - `id`
-   - `createdAt`
-   - normalized numeric values
-5. `createRun()` persists the new run
-6. The saved run is returned to the client
-7. The client prepends it to local state and re-sorts
-
-### Deleting a Run
-
-1. The user clicks delete in `RunList`
-2. The client sends `DELETE /api/runs` with `{ id }`
-3. The API validates the ID and calls `deleteRunById()`
-4. Storage deletes the row or local JSON record
-5. The API returns `{ id }`
-6. The client removes the run from local state
-
-## Storage Modes
-
-### Local JSON File Mode
-
-If `NETLIFY_DATABASE_URL` is not set and the app is not running as a deployed Netlify function, the app uses:
-
-- file: `data/runs.json`
-
-Behavior:
-
-- `GET /api/runs` reads from the file
-- `POST /api/runs` writes to the file
-- `DELETE /api/runs` rewrites the file without the deleted run
-
-The file is created automatically if it does not exist.
-
-In a deployed Netlify runtime without `NETLIFY_DATABASE_URL`, write operations are intentionally blocked with an explicit error instead of silently attempting to write to the read-only bundle.
-
-### Database Mode
-
-If `NETLIFY_DATABASE_URL` is set, the app uses Netlify DB via Neon.
-
-Behavior:
-
-- the app creates the `runs` table if it does not already exist
-- the app seeds the database from `data/runs.json` if the table is empty
-- future reads and writes use SQL instead of the local file
-
-This logic is handled in `src/lib/runStore.js`.
-
-## Data Model
-
-The application works with a run object shaped like this:
-
-```json
-{
-  "id": "string",
-  "date": "YYYY-MM-DD",
-  "distance": 8.5,
-  "durationMinutes": 46,
-  "notes": "optional string",
-  "createdAt": "2026-03-20T12:34:56.000Z"
-}
-```
-
-### Validation Rules
-
-Validation is implemented in `src/lib/runs.js`.
-
-- `date` must be a valid ISO-style date string: `YYYY-MM-DD`
-- `distance` must be between `0.1` and `200` km
-- `durationMinutes` must be between `1` and `1440`
-- `notes` must be `160` characters or fewer
-
-### Derived Metrics
-
-Also in `src/lib/runs.js`:
-
-- pace = `durationMinutes / distance`
-- total distance = sum of all runs
-- total duration = sum of all run durations
-- average pace = total duration / total distance
-- best pace = lowest pace value
-- longest run = greatest distance value
+That change is what turns auth into actual authorization for the data set.
 
 ## API Reference
 
-All routes below require authentication.
-
 ### `GET /api/runs`
 
-Returns all runs in reverse chronological order.
-
-Example response:
-
-```json
-[
-  {
-    "id": "abc123",
-    "date": "2026-03-20",
-    "distance": 8.5,
-    "durationMinutes": 46,
-    "notes": "Easy effort",
-    "createdAt": "2026-03-20T10:00:00.000Z"
-  }
-]
-```
+Returns the current authenticated user's runs in reverse chronological order.
 
 ### `POST /api/runs`
 
@@ -231,15 +126,7 @@ Accepts:
 }
 ```
 
-Returns the saved run with `id` and `createdAt`.
-
-Validation failures return `400` with:
-
-```json
-{
-  "error": "Human readable validation message"
-}
-```
+Returns the saved run with generated `id` and `createdAt`.
 
 ### `DELETE /api/runs`
 
@@ -259,84 +146,182 @@ Returns:
 }
 ```
 
-If the run does not exist, the API returns `404`.
-
 ### `GET /api/health`
 
-Returns a simple status payload.
+Returns a minimal authenticated health payload, including storage mode and database health when a DB connection is configured.
 
-Local-file mode example:
+### `/api/auth/*`
 
-```json
-{
-  "status": "ok",
-  "storage": "local-file",
-  "timestamp": "2026-03-20T12:00:00.000Z"
-}
+This route tree is handled by Better Auth.
+
+Important behavior:
+
+- session lookup
+- OAuth sign-in start
+- OAuth callback handling
+- sign-out
+
+You do not need to create manual handlers for those endpoints.
+
+## Environment Variables
+
+### Required for production auth
+
+- `BETTER_AUTH_SECRET`
+- `BETTER_AUTH_URL`
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `ALLOWED_USER_EMAILS`
+
+### Required for production persistence
+
+- `NETLIFY_DATABASE_URL`
+
+### Example local `.env.local`
+
+```bash
+BETTER_AUTH_SECRET="replace-this-with-a-long-random-secret"
+BETTER_AUTH_URL="http://localhost:3000"
+GOOGLE_CLIENT_ID="your-google-oauth-client-id"
+GOOGLE_CLIENT_SECRET="your-google-oauth-client-secret"
+ALLOWED_USER_EMAILS="you@example.com"
+NETLIFY_DATABASE_URL="postgresql://..."
 ```
 
-Database mode example:
+Notes:
 
-```json
-{
-  "status": "ok",
-  "storage": "database",
-  "timestamp": "2026-03-20T12:00:00.000Z",
-  "database": {
-    "healthy": true
-  }
-}
+- In production, `ALLOWED_USER_EMAILS` should be set. The app intentionally treats a missing allowlist as a misconfiguration outside development.
+- `BETTER_AUTH_URL` should match the deployed site origin, for example `https://runtracker-by-jdr.netlify.app`.
+- `RUNTRACKER_ADMIN_TOKEN` is no longer used.
+
+## Database Schema And Migrations
+
+The repo now has two migration files:
+
+- `db/migrations/001_create_runs.sql`
+- `db/migrations/002_add_auth_and_run_ownership.sql`
+
+`002_add_auth_and_run_ownership.sql` adds:
+
+- Better Auth tables: `user`, `session`, `account`, `verification`
+- run ownership: `runs.user_id`
+- supporting indexes for auth and run queries
+
+Apply migrations with:
+
+```bash
+npm run db:migrate
 ```
 
-If the database check fails, it returns `503`.
+## Importing Existing Runs
 
-### `GET /api/session`
+Import the local JSON seed file into Postgres with:
 
-Returns:
-
-```json
-{
-  "authenticated": true
-}
+```bash
+npm run db:import
 ```
 
-### `POST /api/session`
+Imported runs are inserted with `user_id = NULL`, which preserves old data but does not automatically assign ownership to a specific account. If you want those runs permanently tied to your user, update them in the database after your first login.
 
-Accepts:
+## Local Development
 
-```json
-{
-  "token": "your admin token"
-}
+1. Install dependencies:
+
+```bash
+npm install
 ```
 
-On success it sets an authenticated session cookie and returns `204`.
+2. Set the environment variables in `.env.local`.
 
-### `DELETE /api/session`
+3. Apply migrations if you are using a database:
 
-Clears the session cookie and returns `204`.
+```bash
+npm run db:migrate
+```
 
-## Database Schema
+4. Start the app:
 
-The base schema is in `db/migrations/001_create_runs.sql`.
+```bash
+npm run dev
+```
 
-It creates:
+## Deployment On Netlify
 
-- `runs`
-- `schema_migrations`
+1. Connect the repo to Netlify.
+2. Set `NETLIFY_DATABASE_URL`.
+3. Set `BETTER_AUTH_SECRET`.
+4. Set `BETTER_AUTH_URL`.
+5. Set `GOOGLE_CLIENT_ID`.
+6. Set `GOOGLE_CLIENT_SECRET`.
+7. Set `ALLOWED_USER_EMAILS`.
+8. Deploy.
+9. Run `npm run db:migrate` against the database if the schema has not been applied yet.
 
-### `runs`
+## Troubleshooting
 
-Columns:
+### Google sign-in works but `/api/runs` returns `403`
 
-- `id TEXT PRIMARY KEY`
-- `run_date TEXT NOT NULL`
-- `distance_km DOUBLE PRECISION NOT NULL`
-- `duration_minutes INTEGER NOT NULL`
-- `notes TEXT`
-- `created_at TEXT NOT NULL`
+Cause:
 
-### `schema_migrations`
+- the Google account email is not listed in `ALLOWED_USER_EMAILS`
+
+Fix:
+
+- add the email to `ALLOWED_USER_EMAILS`
+- redeploy
+
+### Auth routes fail in production
+
+Cause:
+
+- one or more auth env vars are missing
+
+Fix:
+
+- verify `BETTER_AUTH_SECRET`
+- verify `BETTER_AUTH_URL`
+- verify `GOOGLE_CLIENT_ID`
+- verify `GOOGLE_CLIENT_SECRET`
+
+### Existing runs do not show up after auth migration
+
+Cause:
+
+- they may exist as legacy rows with `user_id = NULL`
+- or they may not have been imported into the current database
+
+Fix:
+
+- run `npm run db:import` if needed
+- inspect the `runs` table and assign `user_id` values if you want strict ownership
+
+### `EROFS: read-only file system, open '/var/task/data/runs.json'`
+
+Cause:
+
+- the deployment is trying to write without a configured database
+
+Fix:
+
+- set `NETLIFY_DATABASE_URL`
+- redeploy
+
+## Verification
+
+Current verification commands:
+
+```bash
+npm run lint
+npm run build
+npm audit --json
+```
+
+## Future Improvements
+
+- automatically migrate legacy `runs.user_id IS NULL` rows to a chosen account
+- add edit and update support for runs
+- add per-user admin tooling
+- add a dedicated SQL script for assigning old runs to a specific Better Auth user
 
 Tracks which SQL migration files have already been applied.
 

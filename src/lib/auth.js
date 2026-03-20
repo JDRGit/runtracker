@@ -1,52 +1,182 @@
-import crypto from "crypto";
+import { betterAuth } from "better-auth";
+import { memoryAdapter } from "better-auth/adapters/memory";
+import { nextCookies } from "better-auth/next-js";
 import { logSecurityEvent } from "./requestLogger";
 
-const SESSION_COOKIE_NAME =
-  process.env.NODE_ENV === "development" ? "runtracker_session" : "__Host-runtracker_session";
-const SESSION_MAX_AGE_SECONDS = 60 * 60 * 12;
+const FALLBACK_AUTH_SECRET = "runtracker-build-secret-change-me";
+const FALLBACK_AUTH_URL = "http://localhost:3000";
+const FALLBACK_DATABASE_URL = "postgresql://runtracker:runtracker@127.0.0.1:5432/runtracker";
 
-function getAdminToken() {
-  return typeof process.env.RUNTRACKER_ADMIN_TOKEN === "string"
-    ? process.env.RUNTRACKER_ADMIN_TOKEN.trim()
-    : "";
+function getEnv(name) {
+  const value = process.env[name];
+  return typeof value === "string" ? value.trim() : "";
 }
 
-function parseCookies(cookieHeader) {
-  if (typeof cookieHeader !== "string" || cookieHeader.trim() === "") {
+function getConfiguredAuthUrl() {
+  return getEnv("BETTER_AUTH_URL") || getEnv("URL") || FALLBACK_AUTH_URL;
+}
+
+function getDatabaseUrl() {
+  return getEnv("NETLIFY_DATABASE_URL") || getEnv("DATABASE_URL") || FALLBACK_DATABASE_URL;
+}
+
+function hasDatabaseUrl() {
+  return Boolean(getEnv("NETLIFY_DATABASE_URL") || getEnv("DATABASE_URL"));
+}
+
+function hasConfiguredAuthSecret() {
+  return getEnv("BETTER_AUTH_SECRET") !== "";
+}
+
+function getAuthSecret() {
+  return getEnv("BETTER_AUTH_SECRET") || FALLBACK_AUTH_SECRET;
+}
+
+function getGoogleProviderConfig() {
+  const clientId = getEnv("GOOGLE_CLIENT_ID");
+  const clientSecret = getEnv("GOOGLE_CLIENT_SECRET");
+
+  if (!clientId || !clientSecret || !hasConfiguredAuthSecret()) {
     return {};
   }
 
-  return cookieHeader.split(";").reduce((cookies, entry) => {
-    const [rawName, ...rawValueParts] = entry.trim().split("=");
+  return {
+    google: {
+      clientId,
+      clientSecret,
+      prompt: "select_account",
+    },
+  };
+}
 
-    if (!rawName) {
-      return cookies;
+function getAllowedUserEmails() {
+  return new Set(
+    getEnv("ALLOWED_USER_EMAILS")
+      .split(",")
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+function hasConfiguredAllowedEmails() {
+  return getAllowedUserEmails().size > 0;
+}
+
+function getMemoryDatabase() {
+  if (!globalThis.__runtrackerBetterAuthMemoryDb) {
+    globalThis.__runtrackerBetterAuthMemoryDb = {};
+  }
+
+  return globalThis.__runtrackerBetterAuthMemoryDb;
+}
+
+function getAuthDatabase() {
+  if (hasDatabaseUrl()) {
+    return {
+      provider: "postgres",
+      url: getDatabaseUrl(),
+    };
+  }
+
+  return memoryAdapter(getMemoryDatabase());
+}
+
+let authInstance = null;
+
+function createAuth() {
+  return betterAuth({
+    advanced: {
+      cookiePrefix: "runtracker",
+    },
+    basePath: "/api/auth",
+    baseURL: getConfiguredAuthUrl(),
+    database: getAuthDatabase(),
+    plugins: [nextCookies()],
+    secret: getAuthSecret(),
+    socialProviders: getGoogleProviderConfig(),
+  });
+}
+
+export function getAuth() {
+  if (!authInstance) {
+    authInstance = createAuth();
+  }
+
+  return authInstance;
+}
+
+export function isGoogleAuthConfigured() {
+  return Boolean(getEnv("GOOGLE_CLIENT_ID") && getEnv("GOOGLE_CLIENT_SECRET") && hasConfiguredAuthSecret());
+}
+
+export function getRequestHeaders(req) {
+  const headers = new Headers();
+
+  for (const [name, value] of Object.entries(req.headers ?? {})) {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        headers.append(name, item);
+      }
+      continue;
     }
 
-    cookies[rawName] = decodeURIComponent(rawValueParts.join("="));
-    return cookies;
-  }, {});
-}
-
-function areEqualStrings(left, right) {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-
-  if (leftBuffer.length !== rightBuffer.length) {
-    return false;
+    if (typeof value === "string") {
+      headers.set(name, value);
+    }
   }
 
-  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+  return headers;
 }
 
-function getExpectedSessionValue() {
-  const adminToken = getAdminToken();
+export async function getSessionFromRequest(req) {
+  return getAuth().api.getSession({
+    headers: getRequestHeaders(req),
+  });
+}
 
-  if (!adminToken) {
-    return "";
+function isAllowedSession(session) {
+  const allowedEmails = getAllowedUserEmails();
+
+  if (allowedEmails.size === 0) {
+    return true;
   }
 
-  return crypto.createHmac("sha256", adminToken).update("runtracker-session").digest("hex");
+  const email = typeof session?.user?.email === "string" ? session.user.email.trim().toLowerCase() : "";
+  return email !== "" && allowedEmails.has(email);
+}
+
+export async function requireAuth(req, res) {
+  if (!hasConfiguredAuthSecret()) {
+    logSecurityEvent(req, "auth.misconfigured", { reason: "missing-better-auth-secret" });
+    res.status(500).json({ error: "Server authentication is not configured." });
+    return null;
+  }
+
+  if (process.env.NODE_ENV !== "development" && !hasConfiguredAllowedEmails()) {
+    logSecurityEvent(req, "auth.misconfigured", { reason: "missing-allowed-user-emails" });
+    res.status(500).json({ error: "Authorized user emails are not configured for this deployment." });
+    return null;
+  }
+
+  const session = await getSessionFromRequest(req);
+
+  if (!session?.user?.id) {
+    logSecurityEvent(req, "auth.required");
+    res.status(401).json({ error: "Authentication required." });
+    return null;
+  }
+
+  if (!isAllowedSession(session)) {
+    logSecurityEvent(req, "auth.forbidden", {
+      email: typeof session.user.email === "string" ? session.user.email : "",
+    });
+    res
+      .status(403)
+      .json({ error: "Your account is signed in, but it is not allowed to access this app." });
+    return null;
+  }
+
+  return session;
 }
 
 function getRequestProtocol(req) {
@@ -57,62 +187,6 @@ function getRequestProtocol(req) {
   }
 
   return process.env.NODE_ENV === "development" ? "http" : "https";
-}
-
-export function hasAuthConfigured() {
-  return getAdminToken() !== "";
-}
-
-export function getRequestSessionValue(req) {
-  const cookies = parseCookies(req.headers.cookie);
-  return typeof cookies[SESSION_COOKIE_NAME] === "string" ? cookies[SESSION_COOKIE_NAME] : "";
-}
-
-export function isValidAdminToken(token) {
-  const adminToken = getAdminToken();
-
-  if (!adminToken || typeof token !== "string" || token.trim() === "") {
-    return false;
-  }
-
-  return areEqualStrings(adminToken, token.trim());
-}
-
-export function isAuthenticatedRequest(req) {
-  if (!hasAuthConfigured()) {
-    return false;
-  }
-
-  const authorizationHeader = req.headers.authorization;
-
-  if (typeof authorizationHeader === "string" && authorizationHeader.startsWith("Bearer ")) {
-    return isValidAdminToken(authorizationHeader.slice("Bearer ".length));
-  }
-
-  const sessionValue = getRequestSessionValue(req);
-  const expectedSessionValue = getExpectedSessionValue();
-
-  if (!sessionValue || !expectedSessionValue) {
-    return false;
-  }
-
-  return areEqualStrings(sessionValue, expectedSessionValue);
-}
-
-export function requireAuth(req, res) {
-  if (!hasAuthConfigured()) {
-    logSecurityEvent(req, "auth.misconfigured");
-    res.status(500).json({ error: "Server authentication is not configured." });
-    return false;
-  }
-
-  if (!isAuthenticatedRequest(req)) {
-    logSecurityEvent(req, "auth.required");
-    res.status(401).json({ error: "Authentication required." });
-    return false;
-  }
-
-  return true;
 }
 
 export function enforceSameOrigin(req, res) {
@@ -139,38 +213,4 @@ export function enforceSameOrigin(req, res) {
   }
 
   return true;
-}
-
-export function createSessionCookie() {
-  const parts = [
-    `${SESSION_COOKIE_NAME}=${encodeURIComponent(getExpectedSessionValue())}`,
-    "HttpOnly",
-    "Path=/",
-    "Priority=High",
-    "SameSite=Strict",
-    `Max-Age=${SESSION_MAX_AGE_SECONDS}`,
-  ];
-
-  if (process.env.NODE_ENV !== "development") {
-    parts.push("Secure");
-  }
-
-  return parts.join("; ");
-}
-
-export function clearSessionCookie() {
-  const parts = [
-    `${SESSION_COOKIE_NAME}=`,
-    "HttpOnly",
-    "Path=/",
-    "Priority=High",
-    "SameSite=Strict",
-    "Max-Age=0",
-  ];
-
-  if (process.env.NODE_ENV !== "development") {
-    parts.push("Secure");
-  }
-
-  return parts.join("; ");
 }

@@ -12,11 +12,13 @@ export default async function handler(req, res) {
         return;
       }
 
-      if (!requireAuth(req, res)) {
+      const session = await requireAuth(req, res);
+
+      if (!session) {
         return;
       }
 
-      res.status(200).json(await getRuns());
+      res.status(200).json(await getRuns(session.user.id));
       return;
     }
 
@@ -25,7 +27,15 @@ export default async function handler(req, res) {
         return;
       }
 
-      if (!enforceSameOrigin(req, res) || !requireAuth(req, res)) {
+      const sameOriginAllowed = enforceSameOrigin(req, res);
+
+      if (!sameOriginAllowed) {
+        return;
+      }
+
+      const session = await requireAuth(req, res);
+
+      if (!session) {
         return;
       }
 
@@ -42,7 +52,7 @@ export default async function handler(req, res) {
         ...validation.value,
       };
 
-      res.status(201).json(await createRun(newRun));
+      res.status(201).json(await createRun(session.user.id, newRun));
       return;
     }
 
@@ -51,7 +61,15 @@ export default async function handler(req, res) {
         return;
       }
 
-      if (!enforceSameOrigin(req, res) || !requireAuth(req, res)) {
+      const sameOriginAllowed = enforceSameOrigin(req, res);
+
+      if (!sameOriginAllowed) {
+        return;
+      }
+
+      const session = await requireAuth(req, res);
+
+      if (!session) {
         return;
       }
 
@@ -62,7 +80,7 @@ export default async function handler(req, res) {
         return;
       }
 
-      const deleted = await deleteRunById(id);
+      const deleted = await deleteRunById(session.user.id, id);
 
       if (!deleted) {
         res.status(404).json({ error: "Run not found." });

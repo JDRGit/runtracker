@@ -28,6 +28,7 @@ async function main() {
   await sql`
     CREATE TABLE IF NOT EXISTS runs (
       id TEXT PRIMARY KEY,
+      user_id TEXT,
       run_date TEXT NOT NULL,
       distance_km DOUBLE PRECISION NOT NULL,
       duration_minutes INTEGER NOT NULL,
@@ -46,9 +47,10 @@ async function main() {
     const durationMinutes = Number(run.durationMinutes ?? run.time);
 
     const insertedRows = await sql`
-      INSERT INTO runs (id, run_date, distance_km, duration_minutes, notes, created_at)
+      INSERT INTO runs (id, user_id, run_date, distance_km, duration_minutes, notes, created_at)
       VALUES (
         ${run.id},
+        ${null},
         ${run.date},
         ${Number(run.distance)},
         ${Math.round(durationMinutes)},
