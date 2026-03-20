@@ -1,15 +1,34 @@
 import { v4 as uuidv4 } from "uuid";
+import { enforceSameOrigin, requireAuth } from "../../lib/auth";
+import { logApiError } from "../../lib/requestLogger";
+import { applyRateLimit } from "../../lib/rateLimit";
 import { validateRunInput } from "../../lib/runs";
 import { createRun, deleteRunById, getRuns } from "../../lib/runStore";
 
 export default async function handler(req, res) {
   try {
     if (req.method === "GET") {
+      if (!applyRateLimit(req, res, { limit: 60, scope: "runs:get", windowMs: 60_000 })) {
+        return;
+      }
+
+      if (!requireAuth(req, res)) {
+        return;
+      }
+
       res.status(200).json(await getRuns());
       return;
     }
 
     if (req.method === "POST") {
+      if (!applyRateLimit(req, res, { limit: 20, scope: "runs:post", windowMs: 60_000 })) {
+        return;
+      }
+
+      if (!enforceSameOrigin(req, res) || !requireAuth(req, res)) {
+        return;
+      }
+
       const validation = validateRunInput(req.body ?? {});
 
       if (!validation.isValid) {
@@ -28,6 +47,14 @@ export default async function handler(req, res) {
     }
 
     if (req.method === "DELETE") {
+      if (!applyRateLimit(req, res, { limit: 20, scope: "runs:delete", windowMs: 60_000 })) {
+        return;
+      }
+
+      if (!enforceSameOrigin(req, res) || !requireAuth(req, res)) {
+        return;
+      }
+
       const id = typeof req.body?.id === "string" ? req.body.id.trim() : "";
 
       if (!id) {
@@ -49,6 +76,7 @@ export default async function handler(req, res) {
     res.setHeader("Allow", ["GET", "POST", "DELETE"]);
     res.status(405).json({ error: `Method ${req.method} not allowed.` });
   } catch (error) {
-    res.status(500).json({ error: error.message || "Unexpected server error." });
+    logApiError(req, "runs.error", error);
+    res.status(500).json({ error: "Unexpected server error." });
   }
 }

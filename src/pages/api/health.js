@@ -1,4 +1,7 @@
 import { neon } from "@netlify/neon";
+import { requireAuth } from "../../lib/auth";
+import { logApiError } from "../../lib/requestLogger";
+import { applyRateLimit } from "../../lib/rateLimit";
 
 function hasDatabaseConnection() {
   return typeof process.env.NETLIFY_DATABASE_URL === "string" &&
@@ -9,6 +12,14 @@ export default async function handler(req, res) {
   if (req.method !== "GET") {
     res.setHeader("Allow", ["GET"]);
     res.status(405).json({ error: `Method ${req.method} not allowed.` });
+    return;
+  }
+
+  if (!applyRateLimit(req, res, { limit: 10, scope: "health:get", windowMs: 60_000 })) {
+    return;
+  }
+
+  if (!requireAuth(req, res)) {
     return;
   }
 
@@ -31,14 +42,14 @@ export default async function handler(req, res) {
       ...payload,
       database: {
         healthy: result?.healthy === 1,
-        time: result?.database_time ?? null,
       },
     });
   } catch (error) {
+    logApiError(req, "health.error", error);
     res.status(503).json({
       ...payload,
       status: "error",
-      error: error.message || "Database health check failed.",
+      error: "Database health check failed.",
     });
   }
 }

@@ -1,6 +1,6 @@
 "use client";
 
-export default function ClientLayout({ children }) {
+export default function ClientLayout({ actions = null, children }) {
   const todayLabel = new Intl.DateTimeFormat("en-US", {
     weekday: "long",
     month: "long",
@@ -15,8 +15,11 @@ export default function ClientLayout({ children }) {
             <p className="eyebrow">Run tracker</p>
             <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">RunTracker</h1>
           </div>
-          <div className="inline-flex rounded-full border border-slate-200/80 bg-white/80 px-4 py-2 text-sm text-slate-600 shadow-sm">
-            {todayLabel}
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            {actions}
+            <div className="inline-flex rounded-full border border-slate-200/80 bg-white/80 px-4 py-2 text-sm text-slate-600 shadow-sm">
+              {todayLabel}
+            </div>
           </div>
         </div>
       </header>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import AuthPanel from "./AuthPanel";
 import ClientLayout from "./ClientLayout";
 import LogRunForm from "./LogRunForm";
 import RunList from "./RunList";
@@ -23,6 +24,9 @@ async function getResponseError(response, fallbackMessage) {
 }
 
 export default function RunTrackerApp() {
+  const [authStatus, setAuthStatus] = useState("checking");
+  const [authError, setAuthError] = useState("");
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [runs, setRuns] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -30,12 +34,48 @@ export default function RunTrackerApp() {
   const [activeDeleteId, setActiveDeleteId] = useState("");
 
   useEffect(() => {
+    const checkSession = async () => {
+      try {
+        const response = await fetch("/api/session", {
+          cache: "no-store",
+        });
+
+        if (!response.ok) {
+          throw new Error(await getResponseError(response, "Could not verify your session."));
+        }
+
+        const data = await response.json();
+        setAuthStatus(data.authenticated ? "authenticated" : "unauthenticated");
+      } catch (error) {
+        setAuthError(error.message || "Could not verify your session.");
+        setAuthStatus("unauthenticated");
+      }
+    };
+
+    checkSession();
+  }, []);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated") {
+      setRuns([]);
+      setIsLoading(false);
+      setLoadError("");
+      setListError("");
+      setActiveDeleteId("");
+      return;
+    }
+
     const loadRuns = async () => {
       setIsLoading(true);
       setLoadError("");
 
       try {
         const response = await fetch("/api/runs");
+
+        if (response.status === 401) {
+          setAuthStatus("unauthenticated");
+          throw new Error("Session expired. Sign in again.");
+        }
 
         if (!response.ok) {
           throw new Error(await getResponseError(response, "Could not load your runs."));
@@ -51,7 +91,44 @@ export default function RunTrackerApp() {
     };
 
     loadRuns();
-  }, []);
+  }, [authStatus]);
+
+  const handleAuthenticate = async (token) => {
+    setAuthError("");
+    setIsAuthenticating(true);
+
+    try {
+      const response = await fetch("/api/session", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ token }),
+      });
+
+      if (!response.ok) {
+        throw new Error(await getResponseError(response, "Could not sign in."));
+      }
+
+      setAuthStatus("authenticated");
+    } catch (error) {
+      setAuthError(error.message || "Could not sign in.");
+    } finally {
+      setIsAuthenticating(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    setAuthError("");
+
+    try {
+      await fetch("/api/session", {
+        method: "DELETE",
+      });
+    } finally {
+      setAuthStatus("unauthenticated");
+    }
+  };
 
   const handleCreateRun = async (runPayload) => {
     const response = await fetch("/api/runs", {
@@ -61,6 +138,11 @@ export default function RunTrackerApp() {
       },
       body: JSON.stringify(runPayload),
     });
+
+    if (response.status === 401) {
+      setAuthStatus("unauthenticated");
+      throw new Error("Session expired. Sign in again.");
+    }
 
     if (!response.ok) {
       throw new Error(await getResponseError(response, "Could not save that run."));
@@ -87,6 +169,11 @@ export default function RunTrackerApp() {
         body: JSON.stringify({ id }),
       });
 
+      if (response.status === 401) {
+        setAuthStatus("unauthenticated");
+        throw new Error("Session expired. Sign in again.");
+      }
+
       if (!response.ok) {
         throw new Error(await getResponseError(response, "Could not delete that run."));
       }
@@ -100,6 +187,19 @@ export default function RunTrackerApp() {
   };
 
   const stats = getRunStats(runs);
+
+  if (authStatus !== "authenticated") {
+    return (
+      <ClientLayout>
+        <AuthPanel
+          errorMessage={authError || loadError}
+          isAuthenticating={isAuthenticating}
+          isCheckingSession={authStatus === "checking"}
+          onAuthenticate={handleAuthenticate}
+        />
+      </ClientLayout>
+    );
+  }
 
   const statCards = [
     {
@@ -142,7 +242,13 @@ export default function RunTrackerApp() {
   ];
 
   return (
-    <ClientLayout>
+    <ClientLayout
+      actions={
+        <button className="ghost-button" onClick={handleSignOut} type="button">
+          Sign out
+        </button>
+      }
+    >
       <section className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_360px]">
         <div className="glass-panel bg-white/80">
           <div className="absolute inset-x-0 top-0 h-32 bg-gradient-to-r from-amber-200/60 via-orange-100/20 to-transparent blur-2xl" />

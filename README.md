@@ -5,6 +5,8 @@ RunTracker is a Next.js application for logging runs, reviewing training history
 - local development: `data/runs.json`
 - deployed environments: Netlify DB via Neon using `NETLIFY_DATABASE_URL`
 
+All API access is protected by an admin session backed by `RUNTRACKER_ADMIN_TOKEN`.
+
 Live demo: [https://runtracker-by-jdr.netlify.app/](https://runtracker-by-jdr.netlify.app/)
 
 ## What The App Does
@@ -15,6 +17,7 @@ Live demo: [https://runtracker-by-jdr.netlify.app/](https://runtracker-by-jdr.ne
 - lists saved runs in reverse chronological order
 - allows deleting runs
 - exposes a health endpoint for application and database checks
+- requires sign-in before data can be viewed or changed
 
 ## Tech Stack
 
@@ -54,14 +57,17 @@ The key UI files are:
 
 ### API Layer
 
-The backend uses two API routes in `src/pages/api`:
+The backend uses three API routes in `src/pages/api`:
 
 - `src/pages/api/runs.js`
 - `src/pages/api/health.js`
+- `src/pages/api/session.js`
 
-`/api/runs` validates input, generates IDs and timestamps, and delegates actual persistence to the storage layer in `src/lib/runStore.js`.
+`/api/runs` validates input, generates IDs and timestamps, applies rate limiting, requires authentication, and delegates persistence to `src/lib/runStore.js`.
 
-`/api/health` reports whether the app is running in local-file mode or database mode and, when a database connection exists, executes a simple SQL query to verify connectivity.
+`/api/health` is authenticated and performs a minimal database connectivity check.
+
+`/api/session` handles sign-in and sign-out by validating the admin token and setting or clearing an `HttpOnly` session cookie.
 
 ### Storage Layer
 
@@ -73,6 +79,22 @@ It decides which backend to use:
 - If not, it falls back to the local JSON file at `data/runs.json`
 
 This keeps local development simple while making deployed writes safe on Netlify, where the bundled filesystem is read-only.
+
+### Authentication And Rate Limiting
+
+Authentication and request hardening are implemented in:
+
+- `src/lib/auth.js`
+- `src/lib/rateLimit.js`
+
+The app uses a shared admin token model:
+
+1. the user enters the admin token in the frontend
+2. `POST /api/session` validates it against `RUNTRACKER_ADMIN_TOKEN`
+3. the server sets an `HttpOnly`, `SameSite=Strict` session cookie
+4. protected API routes require that cookie or a matching bearer token
+
+The backend also applies best-effort in-memory rate limits per route and IP.
 
 ## Request Flow
 
@@ -175,6 +197,8 @@ Also in `src/lib/runs.js`:
 
 ## API Reference
 
+All routes below require authentication.
+
 ### `GET /api/runs`
 
 Returns all runs in reverse chronological order.
@@ -259,13 +283,38 @@ Database mode example:
   "storage": "database",
   "timestamp": "2026-03-20T12:00:00.000Z",
   "database": {
-    "healthy": true,
-    "time": "2026-03-20 12:00:00+00"
+    "healthy": true
   }
 }
 ```
 
 If the database check fails, it returns `503`.
+
+### `GET /api/session`
+
+Returns:
+
+```json
+{
+  "authenticated": true
+}
+```
+
+### `POST /api/session`
+
+Accepts:
+
+```json
+{
+  "token": "your admin token"
+}
+```
+
+On success it sets an authenticated session cookie and returns `204`.
+
+### `DELETE /api/session`
+
+Clears the session cookie and returns `204`.
 
 ## Database Schema
 
@@ -349,6 +398,7 @@ NETLIFY_DATABASE_URL="postgres://..." npm run db:import -- ./path/to/runs.json
 │   └── import-runs.mjs
 ├── src/
 │   ├── app/
+│   │   ├── AuthPanel.js
 │   │   ├── ClientLayout.js
 │   │   ├── LogRunForm.js
 │   │   ├── RunList.js
@@ -357,12 +407,15 @@ NETLIFY_DATABASE_URL="postgres://..." npm run db:import -- ./path/to/runs.json
 │   │   ├── layout.js
 │   │   └── page.js
 │   ├── lib/
+│   │   ├── auth.js
+│   │   ├── rateLimit.js
 │   │   ├── runStore.js
 │   │   └── runs.js
 │   └── pages/
 │       └── api/
 │           ├── health.js
-│           └── runs.js
+│           ├── runs.js
+│           └── session.js
 ├── next.config.mjs
 ├── package.json
 └── README.md
@@ -373,8 +426,11 @@ NETLIFY_DATABASE_URL="postgres://..." npm run db:import -- ./path/to/runs.json
 ### Required In Production
 
 - `NETLIFY_DATABASE_URL`
+- `RUNTRACKER_ADMIN_TOKEN`
 
-This is the main connection string used by `@netlify/neon`.
+`NETLIFY_DATABASE_URL` is the main connection string used by `@netlify/neon`.
+
+`RUNTRACKER_ADMIN_TOKEN` is the shared secret used to sign in to the dashboard and authorize protected API access.
 
 ### Present In Netlify DB Setups
 
@@ -393,6 +449,7 @@ This is the simplest local setup.
 git clone <your-repo-url>
 cd runtracker
 npm install
+export RUNTRACKER_ADMIN_TOKEN="choose-a-strong-token"
 npm run dev
 ```
 
@@ -408,6 +465,7 @@ If you want to test the database-backed path locally:
 
 ```bash
 export NETLIFY_DATABASE_URL="postgres://..."
+export RUNTRACKER_ADMIN_TOKEN="choose-a-strong-token"
 npm run db:migrate
 npm run dev
 ```
@@ -423,12 +481,14 @@ npm run db:import
 
 1. Connect the repo to Netlify
 2. Ensure the site has `NETLIFY_DATABASE_URL`
-3. Deploy the site
-4. Optionally run migrations explicitly with `npm run db:migrate`
-5. Check the health endpoint after deploy
+3. Ensure the site has `RUNTRACKER_ADMIN_TOKEN`
+4. Deploy the site
+5. Optionally run migrations explicitly with `npm run db:migrate`
+6. Check the health endpoint after deploy
 
 Recommended post-deploy checks:
 
+- sign in successfully
 - open `/api/health`
 - create a run
 - refresh the page and confirm the run persists
@@ -452,7 +512,72 @@ npm run db:import
 - `next.config.mjs` sets `outputFileTracingRoot` to the repo root to avoid incorrect workspace-root detection
 - In a deployed Netlify runtime, writes should go to the database, not the bundled filesystem
 - If `NETLIFY_DATABASE_URL` is missing in a Netlify runtime, create and delete operations will fail by design
+- Protected routes return generic errors to clients and log detailed failures server-side
+- State-changing routes enforce same-origin checks when an `Origin` header is present
+- Rate limiting is in-memory and best-effort, which helps but is not a distributed anti-abuse system
 
+## Troubleshooting
+
+### `EROFS: read-only file system, open '/var/task/data/runs.json'`
+
+Cause:
+
+- the deployed function is trying to write to the bundled filesystem
+
+Fix:
+
+- ensure the site has `NETLIFY_DATABASE_URL`
+- redeploy with the current codebase
+
+### `Authentication required`
+
+Cause:
+
+- the user is not signed in
+- the session expired
+- the admin token changed after the session cookie was issued
+
+Fix:
+
+- sign in again using `RUNTRACKER_ADMIN_TOKEN`
+- verify the deployed environment variable matches the expected token
+
+### `NETLIFY_DATABASE_URL is required for deployed write access`
+
+Cause:
+
+- the application is running in a Netlify environment without a DB connection string
+
+Fix:
+
+- verify the Netlify DB integration is connected
+- verify the environment variable exists for the deployed site
+- redeploy after the env var is available
+
+### Sign-in always fails
+
+Cause:
+
+- `RUNTRACKER_ADMIN_TOKEN` is missing
+- the entered token does not match the configured token
+
+Fix:
+
+- confirm `RUNTRACKER_ADMIN_TOKEN` is set locally or in Netlify
+- confirm the token entered in the UI matches exactly
+- redeploy after changing the env var in production
+
+### Database health check returns `503`
+
+Cause:
+
+- the app could not connect to Neon
+
+Check:
+
+- `NETLIFY_DATABASE_URL`
+- database availability in Netlify / Neon
+- whether the schema or tables exist
 ## Future Improvements
 
 - add structured SQL migration versioning beyond a single base migration
