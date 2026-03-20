@@ -1,34 +1,11 @@
-import fs from "fs";
-import path from "path";
 import { v4 as uuidv4 } from "uuid";
-import { normalizeStoredRun, sortRunsByDate, validateRunInput } from "../../lib/runs";
+import { validateRunInput } from "../../lib/runs";
+import { createRun, deleteRunById, getRuns } from "../../lib/runStore";
 
-const filePath = path.resolve(process.cwd(), "data", "runs.json");
-
-function ensureDataFile() {
-  if (!fs.existsSync(filePath)) {
-    fs.writeFileSync(filePath, "[]");
-  }
-}
-
-function readData() {
-  ensureDataFile();
-
-  const jsonData = fs.readFileSync(filePath, "utf8");
-  const parsedData = JSON.parse(jsonData);
-  const runs = Array.isArray(parsedData) ? parsedData : [];
-
-  return sortRunsByDate(runs.map(normalizeStoredRun).filter(Boolean));
-}
-
-function writeData(data) {
-  fs.writeFileSync(filePath, JSON.stringify(sortRunsByDate(data), null, 2));
-}
-
-export default function handler(req, res) {
+export default async function handler(req, res) {
   try {
     if (req.method === "GET") {
-      res.status(200).json(readData());
+      res.status(200).json(await getRuns());
       return;
     }
 
@@ -46,9 +23,7 @@ export default function handler(req, res) {
         ...validation.value,
       };
 
-      const data = readData();
-      writeData([newRun, ...data]);
-      res.status(201).json(newRun);
+      res.status(201).json(await createRun(newRun));
       return;
     }
 
@@ -60,15 +35,13 @@ export default function handler(req, res) {
         return;
       }
 
-      const data = readData();
-      const nextRuns = data.filter((run) => run.id !== id);
+      const deleted = await deleteRunById(id);
 
-      if (nextRuns.length === data.length) {
+      if (!deleted) {
         res.status(404).json({ error: "Run not found." });
         return;
       }
 
-      writeData(nextRuns);
       res.status(200).json({ id });
       return;
     }

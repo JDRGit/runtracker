@@ -1,6 +1,6 @@
 # RunTracker
 
-RunTracker is a small Next.js app for logging runs and reviewing your training history. It stores run entries in `data/runs.json`, calculates pace automatically, and surfaces useful summary stats on the dashboard.
+RunTracker is a small Next.js app for logging runs and reviewing your training history. It stores run entries in `data/runs.json` during local development, uses Netlify DB backed by Neon in production through `NETLIFY_DATABASE_URL`, calculates pace automatically, and surfaces useful summary stats on the dashboard.
 
 ## Live Demo
 
@@ -13,11 +13,14 @@ RunTracker is a small Next.js app for logging runs and reviewing your training h
 - View a sorted run history with per-run pace.
 - Delete saved runs from the dashboard.
 - Validate run input in both the UI and the API.
+- Persist deployed run data in Netlify DB instead of the read-only function filesystem.
 - Lint the project with ESLint and `next/core-web-vitals`.
 
 ## Technologies Used
 
 - [Next.js](https://nextjs.org/)
+- [Netlify DB](https://docs.netlify.com/build/data-and-storage/netlify-db/)
+- [Neon](https://neon.com/)
 - [Tailwind CSS](https://tailwindcss.com/)
 - [uuid](https://www.npmjs.com/package/uuid)
 - [ESLint](https://eslint.org/)
