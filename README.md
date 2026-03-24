@@ -1,139 +1,161 @@
 # RunTracker
 
-RunTracker is a Next.js application for logging runs, reviewing training history, and tracking pace-based metrics. The UI uses the App Router, the backend uses API routes plus a Better Auth route handler, and persistence uses Netlify DB / Neon when a database URL is configured.
+RunTracker is a Next.js app for logging runs, tracking pace, and reviewing training history. It is deployed on Netlify, stores run data in Neon Postgres through Netlify DB, and uses Neon Auth for user authentication.
 
 Live demo: [https://runtracker-by-jdr.netlify.app/](https://runtracker-by-jdr.netlify.app/)
 
-## What Changed
+## Stack
 
-The app no longer uses a shared admin token.
+- Next.js App Router
+- React
+- Tailwind CSS
+- Netlify hosting
+- Netlify DB / Neon Postgres for run storage
+- Neon Auth for sign-in and session handling
+- ESLint
 
-Authentication is now handled by Better Auth with passkeys plus Google OAuth fallback, and run data is scoped to the signed-in user. In production, access is restricted by `ALLOWED_USER_EMAILS`, so registration and sign-in still require an allowed account.
+## How the app is organized
 
-## Tech Stack
+The codebase has four main layers:
 
-- [Next.js](https://nextjs.org/)
-- [React](https://react.dev/)
-- [Tailwind CSS](https://tailwindcss.com/)
-- [Better Auth](https://better-auth.com/)
-- [Netlify DB](https://docs.netlify.com/build/data-and-storage/netlify-db/)
-- [Neon](https://neon.com/)
-- [pg](https://www.npmjs.com/package/pg)
-- [uuid](https://www.npmjs.com/package/uuid)
-- [ESLint](https://eslint.org/)
-
-## Architecture Overview
-
-The project is split into four layers:
-
-1. client UI
+1. UI
 2. auth
-3. API routes
+3. API
 4. persistence
 
-### Client UI
+### UI
 
-The main dashboard is rendered by `src/app/RunTrackerApp.js`.
+The dashboard is rendered by [src/app/RunTrackerApp.js](/Users/jwho/Documents/next/runtracker/src/app/RunTrackerApp.js). It:
 
-- It uses Better Auth's React client to read the current session.
-- It starts passkey sign-in from the browser.
-- It keeps Google sign-in as the bootstrap and recovery path for registering a first passkey.
-- It loads runs from `GET /api/runs` after a valid session exists.
-- It posts new runs to `POST /api/runs`.
-- It deletes runs through `DELETE /api/runs`.
-- It computes display-only stats from the current in-memory run list.
-- It lets an authenticated user register and remove passkeys from the dashboard.
+- reads the current auth session with the Neon Auth client
+- loads runs from `/api/runs` after a valid session exists
+- posts new runs to `/api/runs`
+- deletes runs through `/api/runs`
+- computes dashboard stats in memory from the fetched runs
 
-Important client files:
+Related UI files:
 
-- `src/app/RunTrackerApp.js`
-- `src/app/AuthPanel.js`
-- `src/app/LogRunForm.js`
-- `src/app/RunList.js`
-- `src/app/ClientLayout.js`
-- `src/app/PasskeyPanel.js`
-- `src/lib/auth-client.js`
-- `src/lib/runs.js`
+- [src/app/RunTrackerApp.js](/Users/jwho/Documents/next/runtracker/src/app/RunTrackerApp.js)
+- [src/app/AuthPanel.js](/Users/jwho/Documents/next/runtracker/src/app/AuthPanel.js)
+- [src/app/ClientLayout.js](/Users/jwho/Documents/next/runtracker/src/app/ClientLayout.js)
+- [src/app/LogRunForm.js](/Users/jwho/Documents/next/runtracker/src/app/LogRunForm.js)
+- [src/app/RunList.js](/Users/jwho/Documents/next/runtracker/src/app/RunList.js)
+- [src/lib/runs.js](/Users/jwho/Documents/next/runtracker/src/lib/runs.js)
 
-### Auth Layer
+### Auth
 
-Better Auth is configured in `src/lib/auth.js`.
+Neon Auth is configured in [src/lib/auth.js](/Users/jwho/Documents/next/runtracker/src/lib/auth.js).
 
-- The auth route handler lives at `src/app/api/auth/[...all]/route.js`.
-- The passkey plugin is enabled with the relying-party ID and origin derived from `BETTER_AUTH_URL`.
-- Google OAuth is enabled when `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `BETTER_AUTH_SECRET` are present.
-- Passkey registration and passkey sign-in are enabled through `@better-auth/passkey`.
-- The backend uses `auth.api.getSession()` to resolve the signed-in user inside `src/pages/api/runs.js` and `src/pages/api/health.js`.
-- Production access is restricted by `ALLOWED_USER_EMAILS`.
+The project uses three auth-specific entry points:
 
-If no database URL is present, Better Auth falls back to an in-memory adapter so local builds and basic local development still work. Production should always use a real database.
+- [src/lib/auth.js](/Users/jwho/Documents/next/runtracker/src/lib/auth.js)
+  Creates the Neon Auth server instance, enforces optional email allowlisting, and provides same-origin validation for state-changing requests.
+- [src/lib/auth-client.js](/Users/jwho/Documents/next/runtracker/src/lib/auth-client.js)
+  Creates the browser auth client used by `useSession()` and `signOut()`.
+- [src/app/api/auth/[...path]/route.js](/Users/jwho/Documents/next/runtracker/src/app/api/auth/[...path]/route.js)
+  Proxies `/api/auth/*` requests to your Neon Auth endpoint through the official Next.js handler.
 
-### API Layer
+The sign-in UI route is [src/app/auth/[path]/page.js](/Users/jwho/Documents/next/runtracker/src/app/auth/[path]/page.js). It renders Neon Auth’s hosted UI components under `/auth/sign-in`, `/auth/sign-up`, and related auth paths.
 
-The app has two custom API routes in `src/pages/api`:
+The global UI provider is mounted in [src/app/layout.js](/Users/jwho/Documents/next/runtracker/src/app/layout.js) through [src/app/NeonAuthProvider.js](/Users/jwho/Documents/next/runtracker/src/app/NeonAuthProvider.js).
 
-- `src/pages/api/runs.js`
-- `src/pages/api/health.js`
+### API
 
-And one Better Auth route tree:
+The app uses App Router route handlers, not `pages/api`.
 
-- `src/app/api/auth/[...all]/route.js`
+- [src/app/api/runs/route.js](/Users/jwho/Documents/next/runtracker/src/app/api/runs/route.js)
+- [src/app/api/health/route.js](/Users/jwho/Documents/next/runtracker/src/app/api/health/route.js)
+- [src/app/api/auth/[...path]/route.js](/Users/jwho/Documents/next/runtracker/src/app/api/auth/[...path]/route.js)
 
-`/api/runs` validates input, applies rate limiting, requires an authenticated and authorized user, and stores/fetches only that user's runs.
+`/api/runs`:
 
-`/api/health` is also authenticated and returns a minimal database health response.
+- requires an authenticated Neon Auth session
+- optionally enforces `ALLOWED_USER_EMAILS`
+- rate limits reads and writes
+- checks same-origin on `POST` and `DELETE`
+- validates run input before writing
 
-### Persistence Layer
+`/api/health`:
 
-The run storage abstraction is in `src/lib/runStore.js`.
+- requires an authenticated session
+- rate limits requests
+- verifies database connectivity when `NETLIFY_DATABASE_URL` is present
 
-- If `NETLIFY_DATABASE_URL` or `DATABASE_URL` is present, run data uses Postgres.
-- If not, run data falls back to `data/runs.json`.
-- Stored runs now include an internal `userId` owner field.
-- Existing legacy rows with `user_id IS NULL` are still readable by authenticated allowed users until you migrate them to a specific user.
+### Persistence
 
-## Authentication Flow
+Run storage is implemented in [src/lib/runStore.js](/Users/jwho/Documents/next/runtracker/src/lib/runStore.js).
 
-1. The user opens the app.
-2. `RunTrackerApp` reads the Better Auth session with `authClient.useSession()`.
-3. If no session exists, the app shows passkey sign-in first and Google as fallback.
-4. If the user already registered a passkey, Better Auth completes WebAuthn authentication and restores the session without a password.
-5. If the user has not registered a passkey yet, they use Google once, then add a passkey from the dashboard.
-6. Better Auth stores the auth data in the database.
-7. The app then loads runs through `/api/runs`.
-8. The backend checks both authentication and the `ALLOWED_USER_EMAILS` allowlist before returning data.
+Behavior:
 
-## Passwordless Authentication Flow
+- if `NETLIFY_DATABASE_URL` is present, runs are stored in Postgres
+- if no database URL is present, local development can still fall back to [data/runs.json](/Users/jwho/Documents/next/runtracker/data/runs.json)
+- each stored run includes an internal `userId` owner field
+- older rows with `user_id IS NULL` are still readable and deletable by the signed-in user until you explicitly reassign them
 
-RunTracker now supports real passwordless sign-in through passkeys.
+## Request flow
 
-- A first-time user signs in with Google.
-- Once signed in, the dashboard exposes a passkey management panel.
-- The user saves a passkey tied to the current Better Auth account.
-- On future visits, the sign-in screen can authenticate directly with that passkey.
-- Google remains available as a recovery path if a passkey is lost or the user is on a new device.
+### Initial page load
 
-Passkeys require a secure origin, which means:
+1. The browser loads `/`.
+2. [src/app/RunTrackerApp.js](/Users/jwho/Documents/next/runtracker/src/app/RunTrackerApp.js) calls `authClient.useSession()`.
+3. If there is no session, the app shows [src/app/AuthPanel.js](/Users/jwho/Documents/next/runtracker/src/app/AuthPanel.js) with a link into `/auth/sign-in`.
+4. If a session exists, the app fetches `/api/runs`.
+5. [src/app/api/runs/route.js](/Users/jwho/Documents/next/runtracker/src/app/api/runs/route.js) checks auth, applies rate limiting, and returns only that user’s visible runs.
 
-- `http://localhost` during local development is valid
-- deployed environments must use HTTPS
-- `BETTER_AUTH_URL` must match the deployed origin used for passkey registration and sign-in
+### Sign-in flow
 
-## Run Data Ownership
+1. The user opens `/auth/sign-in`.
+2. [src/app/auth/[path]/page.js](/Users/jwho/Documents/next/runtracker/src/app/auth/[path]/page.js) renders Neon Auth UI components.
+3. The UI talks to `/api/auth/*`.
+4. [src/app/api/auth/[...path]/route.js](/Users/jwho/Documents/next/runtracker/src/app/api/auth/[...path]/route.js) proxies the request to your Neon Auth base URL.
+5. Neon Auth completes the provider flow and sets session cookies.
+6. The client session hook starts returning the signed-in user.
 
-Run records are now user-scoped.
+### Creating a run
 
-- New runs are written with the current session user's ID.
-- Reads only return runs owned by the current user, plus legacy rows without an owner.
-- Deletes only remove runs owned by the current user, plus legacy rows without an owner.
+1. [src/app/LogRunForm.js](/Users/jwho/Documents/next/runtracker/src/app/LogRunForm.js) submits JSON to `POST /api/runs`.
+2. The API validates origin, session, allowlist, and body shape.
+3. [src/lib/runStore.js](/Users/jwho/Documents/next/runtracker/src/lib/runStore.js) writes the row with the current `userId`.
+4. The saved run is returned to the client and merged into the local run list.
 
-That change is what turns auth into actual authorization for the data set.
+### Deleting a run
 
-## API Reference
+1. [src/app/RunList.js](/Users/jwho/Documents/next/runtracker/src/app/RunList.js) submits `DELETE /api/runs` with the run ID.
+2. The API validates origin and auth.
+3. The store deletes only rows visible to that user.
+
+## Data model
+
+The public run shape used in the UI is:
+
+```json
+{
+  "id": "uuid",
+  "date": "2026-03-20",
+  "distance": 8.5,
+  "durationMinutes": 46,
+  "notes": "Optional note",
+  "createdAt": "2026-03-20T14:30:00.000Z"
+}
+```
+
+In Postgres, the `runs` table stores:
+
+- `id`
+- `user_id`
+- `run_date`
+- `distance_km`
+- `duration_minutes`
+- `notes`
+- `created_at`
+
+The `user_id` column is the app-level ownership link between Neon Auth users and run rows.
+
+## API reference
 
 ### `GET /api/runs`
 
-Returns the current authenticated user's runs in reverse chronological order.
+Returns the authenticated user’s runs in reverse chronological order.
 
 ### `POST /api/runs`
 
@@ -170,72 +192,56 @@ Returns:
 
 ### `GET /api/health`
 
-Returns a minimal authenticated health payload, including storage mode and database health when a DB connection is configured.
+Returns a minimal authenticated health payload including:
 
-### `/api/auth/*`
+- current account email
+- storage mode
+- current timestamp
+- database health when a DB connection is configured
 
-This route tree is handled by Better Auth.
+## Environment variables
 
-Important behavior:
+### Required for Neon Auth
 
-- session lookup
-- OAuth sign-in start
-- OAuth callback handling
-- passkey registration
-- passkey authentication
-- sign-out
+- `NEON_AUTH_BASE_URL`
+- `NEON_AUTH_COOKIE_SECRET`
 
-You do not need to create manual handlers for those endpoints.
-
-## Environment Variables
-
-### Required for production auth
-
-- `BETTER_AUTH_SECRET`
-- `BETTER_AUTH_URL`
-- `GOOGLE_CLIENT_ID`
-- `GOOGLE_CLIENT_SECRET`
-- `ALLOWED_USER_EMAILS`
-
-### Required for production persistence
+### Required for deployed persistence
 
 - `NETLIFY_DATABASE_URL`
 
-### Example local `.env.local`
+### Optional
+
+- `ALLOWED_USER_EMAILS`
+
+`ALLOWED_USER_EMAILS` is a comma-separated allowlist. If it is set, only those email addresses can use the app even if Neon Auth itself allows them to sign in.
+
+### Example `.env.local`
 
 ```bash
-BETTER_AUTH_SECRET="replace-this-with-a-long-random-secret"
-BETTER_AUTH_URL="http://localhost:3000"
-GOOGLE_CLIENT_ID="your-google-oauth-client-id"
-GOOGLE_CLIENT_SECRET="your-google-oauth-client-secret"
-ALLOWED_USER_EMAILS="you@example.com"
+NEON_AUTH_BASE_URL="https://your-neon-auth-endpoint.neonauth.us-east-1.aws.neon.tech"
+NEON_AUTH_COOKIE_SECRET="replace-this-with-a-random-secret-at-least-32-characters-long"
 NETLIFY_DATABASE_URL="postgresql://..."
+ALLOWED_USER_EMAILS="you@example.com"
 ```
 
 Notes:
 
-- In production, `ALLOWED_USER_EMAILS` should be set. The app intentionally treats a missing allowlist as a misconfiguration outside development.
-- `BETTER_AUTH_URL` should match the deployed site origin, for example `https://runtracker-by-jdr.netlify.app`.
-- `RUNTRACKER_ADMIN_TOKEN` is no longer used.
+- `NEON_AUTH_BASE_URL` should be the Neon Auth endpoint, not your site URL
+- `NEON_AUTH_COOKIE_SECRET` must be at least 32 characters
+- if `ALLOWED_USER_EMAILS` is omitted, any user allowed by Neon Auth can access the app
+- old auth envs like `BETTER_AUTH_*`, `GOOGLE_CLIENT_*`, `RUNTRACKER_ADMIN_TOKEN`, and Supabase env vars are no longer used
 
-## Database Schema And Migrations
+## Database setup
 
-The repo now has two migration files:
+The repo ships with these migration files:
 
-- `db/migrations/001_create_runs.sql`
-- `db/migrations/002_add_auth_and_run_ownership.sql`
+- [db/migrations/001_create_runs.sql](/Users/jwho/Documents/next/runtracker/db/migrations/001_create_runs.sql)
+- [db/migrations/002_add_auth_and_run_ownership.sql](/Users/jwho/Documents/next/runtracker/db/migrations/002_add_auth_and_run_ownership.sql)
 
-`002_add_auth_and_run_ownership.sql` adds:
+These migrations only manage the app-owned schema for runs and migration tracking.
 
-- Better Auth tables: `user`, `session`, `account`, `verification`
-- run ownership: `runs.user_id`
-- supporting indexes for auth and run queries
-
-`003_add_passkey_support.sql` adds:
-
-- the `passkey` table required by `@better-auth/passkey`
-- an index on `passkey."userId"`
-- a unique index on `passkey."credentialID"`
+Neon Auth manages its own auth schema inside Neon. This repo does not create or migrate Neon Auth tables directly.
 
 Apply migrations with:
 
@@ -243,7 +249,7 @@ Apply migrations with:
 npm run db:migrate
 ```
 
-## Importing Existing Runs
+## Importing existing runs
 
 Import the local JSON seed file into Postgres with:
 
@@ -251,9 +257,9 @@ Import the local JSON seed file into Postgres with:
 npm run db:import
 ```
 
-Imported runs are inserted with `user_id = NULL`, which preserves old data but does not automatically assign ownership to a specific account. If you want those runs permanently tied to your user, update them in the database after your first login.
+Imported runs are inserted with `user_id = NULL`. That keeps old data accessible, but it does not automatically assign those runs to a specific user account.
 
-## Local Development
+## Local development
 
 1. Install dependencies:
 
@@ -261,293 +267,68 @@ Imported runs are inserted with `user_id = NULL`, which preserves old data but d
 npm install
 ```
 
-2. Set the environment variables in `.env.local`.
+2. Set the Neon Auth and database environment variables in `.env.local`.
 
-3. Apply migrations if you are using a database:
+3. Apply migrations if you are using the database:
 
 ```bash
 npm run db:migrate
 ```
 
-4. Start the app:
+4. Start the development server:
 
 ```bash
 npm run dev
 ```
 
-5. Bootstrap your first passkey:
+5. Open [http://localhost:3000](http://localhost:3000).
 
-- sign in with Google
-- open the Passkeys panel in the dashboard
-- add a passkey for the current browser, device, or security key
-- sign out and test passkey sign-in from the landing screen
-
-## Deployment On Netlify
+## Netlify deployment
 
 1. Connect the repo to Netlify.
 2. Set `NETLIFY_DATABASE_URL`.
-3. Set `BETTER_AUTH_SECRET`.
-4. Set `BETTER_AUTH_URL`.
-5. Set `GOOGLE_CLIENT_ID`.
-6. Set `GOOGLE_CLIENT_SECRET`.
-7. Set `ALLOWED_USER_EMAILS`.
-8. Deploy.
-9. Run `npm run db:migrate` against the database if the schema has not been applied yet.
+3. Set `NEON_AUTH_BASE_URL`.
+4. Set `NEON_AUTH_COOKIE_SECRET`.
+5. Optionally set `ALLOWED_USER_EMAILS`.
+6. Deploy.
+7. If the database schema is not present yet, run `npm run db:migrate` against the same database.
 
-For passwordless auth to work on the deployed site, make sure:
+## Security model
 
-- `BETTER_AUTH_URL` exactly matches the public site origin
-- the site is served over HTTPS
-- `003_add_passkey_support.sql` has been applied
+The current backend protections are:
+
+- authenticated access for `/api/runs` and `/api/health`
+- optional email allowlisting
+- same-origin checks on state-changing run requests
+- in-memory rate limiting
+- generic client-facing error responses
+- security headers from [next.config.mjs](/Users/jwho/Documents/next/runtracker/next.config.mjs)
+
+Current limits:
+
+- rate limiting is still per-process memory, not globally shared across serverless instances
+- run ownership is app-enforced by `user_id`, not database RLS
+- if you want multi-user roles or direct database access from the client, that is a larger architecture change
 
 ## Troubleshooting
 
-### Google sign-in works but `/api/runs` returns `403`
+### `/api/auth/get-session` returns `500`
 
-Cause:
+Check:
 
-- the Google account email is not listed in `ALLOWED_USER_EMAILS`
-
-Fix:
-
-- add the email to `ALLOWED_USER_EMAILS`
-- redeploy
-
-### Auth routes fail in production
-
-Cause:
-
-- one or more auth env vars are missing
-
-Fix:
-
-- verify `BETTER_AUTH_SECRET`
-- verify `BETTER_AUTH_URL`
-- verify `GOOGLE_CLIENT_ID`
-- verify `GOOGLE_CLIENT_SECRET`
-
-### Existing runs do not show up after auth migration
-
-Cause:
-
-- they may exist as legacy rows with `user_id = NULL`
-- or they may not have been imported into the current database
-
-Fix:
-
-- run `npm run db:import` if needed
-- inspect the `runs` table and assign `user_id` values if you want strict ownership
+- `NEON_AUTH_BASE_URL`
+- `NEON_AUTH_COOKIE_SECRET`
+- that the cookie secret is at least 32 characters
+- that Netlify has the same env vars as local
 
 ### `EROFS: read-only file system, open '/var/task/data/runs.json'`
 
-Cause:
+That means the deployed runtime is trying to write to the local filesystem. The deployed app should use `NETLIFY_DATABASE_URL` so writes go to Postgres instead.
 
-- the deployment is trying to write without a configured database
+### Sign-in UI loads but access is denied
 
-Fix:
+If the auth flow succeeds but the app still returns `403`, check `ALLOWED_USER_EMAILS`.
 
-- set `NETLIFY_DATABASE_URL`
-- redeploy
+### Old auth tables still exist in the database
 
-## Verification
-
-Current verification commands:
-
-```bash
-npm run lint
-npm run build
-npm audit --json
-```
-
-## Future Improvements
-
-- automatically migrate legacy `runs.user_id IS NULL` rows to a chosen account
-- add edit and update support for runs
-- add per-user admin tooling
-- add a dedicated SQL script for assigning old runs to a specific Better Auth user
-
-Tracks which SQL migration files have already been applied.
-
-## Database Scripts
-
-### `npm run db:migrate`
-
-Runs `scripts/apply-migrations.mjs`.
-
-What it does:
-
-1. checks that `NETLIFY_DATABASE_URL` exists
-2. reads SQL files from `db/migrations`
-3. creates `schema_migrations` if needed
-4. skips files already recorded in `schema_migrations`
-5. applies each pending SQL file
-6. records the migration filename after success
-
-Use it like:
-
-```bash
-NETLIFY_DATABASE_URL="postgres://..." npm run db:migrate
-```
-
-### `npm run db:import`
-
-Runs `scripts/import-runs.mjs`.
-
-What it does:
-
-1. checks that `NETLIFY_DATABASE_URL` exists
-2. reads `data/runs.json` by default
-3. inserts runs into the `runs` table
-4. skips duplicates using `ON CONFLICT (id) DO NOTHING`
-
-Use it like:
-
-```bash
-NETLIFY_DATABASE_URL="postgres://..." npm run db:import
-```
-
-Custom import file:
-
-```bash
-NETLIFY_DATABASE_URL="postgres://..." npm run db:import -- ./path/to/runs.json
-```
-
-## Project Structure
-
-```text
-.
-├── data/
-│   └── runs.json
-├── db/
-│   └── migrations/
-│       └── 001_create_runs.sql
-├── scripts/
-│   ├── apply-migrations.mjs
-│   └── import-runs.mjs
-├── src/
-│   ├── app/
-│   │   ├── AuthPanel.js
-│   │   ├── ClientLayout.js
-│   │   ├── LogRunForm.js
-│   │   ├── RunList.js
-│   │   ├── RunTrackerApp.js
-│   │   ├── globals.css
-│   │   ├── layout.js
-│   │   └── page.js
-│   ├── lib/
-│   │   ├── auth.js
-│   │   ├── rateLimit.js
-│   │   ├── runStore.js
-│   │   └── runs.js
-│   └── pages/
-│       └── api/
-│           ├── health.js
-│           ├── runs.js
-│           └── session.js
-├── next.config.mjs
-├── package.json
-└── README.md
-```
-
-## Environment Variables
-
-### Required In Production
-
-- `NETLIFY_DATABASE_URL`
-- `RUNTRACKER_ADMIN_TOKEN`
-
-`NETLIFY_DATABASE_URL` is the main connection string used by `@netlify/neon`.
-
-`RUNTRACKER_ADMIN_TOKEN` is the shared secret used to sign in to the dashboard and authorize protected API access.
-
-### Present In Netlify DB Setups
-
-- `NETLIFY_DATABASE_URL`
-- `NETLIFY_DATABASE_URL_UNPOOLED`
-
-This app currently uses `NETLIFY_DATABASE_URL`.
-
-## Setup And Run Locally
-
-### Option 1: Local JSON File Only
-
-This is the simplest local setup.
-
-```bash
-git clone <your-repo-url>
-cd runtracker
-npm install
-export RUNTRACKER_ADMIN_TOKEN="choose-a-strong-token"
-npm run dev
-```
-
-Then open:
-
-- [http://localhost:3000](http://localhost:3000)
-
-In this mode, data is stored in `data/runs.json`.
-
-### Option 2: Local App Against Netlify DB
-
-If you want to test the database-backed path locally:
-
-```bash
-export NETLIFY_DATABASE_URL="postgres://..."
-export RUNTRACKER_ADMIN_TOKEN="choose-a-strong-token"
-npm run db:migrate
-npm run dev
-```
-
-If you also want to import the current local seed data:
-
-```bash
-export NETLIFY_DATABASE_URL="postgres://..."
-npm run db:import
-```
-
-## Deploying On Netlify
-
-1. Connect the repo to Netlify
-2. Ensure the site has `NETLIFY_DATABASE_URL`
-3. Ensure the site has `RUNTRACKER_ADMIN_TOKEN`
-4. Deploy the site
-5. Optionally run migrations explicitly with `npm run db:migrate`
-6. Check the health endpoint after deploy
-
-Recommended post-deploy checks:
-
-- sign in successfully
-- open `/api/health`
-- create a run
-- refresh the page and confirm the run persists
-- delete a run and confirm the deletion persists
-
-## Useful Commands
-
-```bash
-npm run dev
-npm run build
-npm run lint
-npm run start
-npm run db:migrate
-npm run db:import
-```
-
-## Notes And Operational Behavior
-
-- The frontend uses the App Router, but the backend endpoints are still implemented with API routes under `src/pages/api`
-- The app sorts runs by `date` descending, then `createdAt` descending
-- `next.config.mjs` sets `outputFileTracingRoot` to the repo root to avoid incorrect workspace-root detection
-- In a deployed Netlify runtime, writes should go to the database, not the bundled filesystem
-- If `NETLIFY_DATABASE_URL` is missing in a Netlify runtime, create and delete operations will fail by design
-- Protected routes return generic errors to clients and log detailed failures server-side
-- State-changing routes enforce same-origin checks when an `Origin` header is present
-- Rate limiting is in-memory and best-effort, which helps but is not a distributed anti-abuse system
-
-## Future Improvements
-
-- add structured SQL migration versioning beyond a single base migration
-- add edit/update support for runs
-- add pagination or filtering for larger histories
-- add authentication and per-user run ownership
-- move timestamps to real Postgres timestamp columns if stricter querying is needed
+If you previously ran the older self-hosted auth setup, leftover tables may still exist. The current app does not use them. Remove them only after confirming nothing else depends on them.

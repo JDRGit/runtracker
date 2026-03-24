@@ -1,9 +1,10 @@
+import { NextResponse } from "next/server";
 import { getRequestIp, logSecurityEvent } from "./requestLogger";
 
 const buckets = new Map();
 
-function getBucketKey(req, scope) {
-  return `${scope}:${getRequestIp(req)}`;
+function getBucketKey(request, scope) {
+  return `${scope}:${getRequestIp(request)}`;
 }
 
 function cleanupExpiredBuckets(now) {
@@ -14,11 +15,27 @@ function cleanupExpiredBuckets(now) {
   }
 }
 
-export function applyRateLimit(req, res, { limit, scope, windowMs }) {
+function buildRateLimitHeaders(bucket, limit) {
+  return {
+    "X-RateLimit-Limit": String(limit),
+    "X-RateLimit-Remaining": String(Math.max(limit - bucket.count, 0)),
+    "X-RateLimit-Reset": String(Math.ceil(bucket.resetAt / 1000)),
+  };
+}
+
+export function appendRateLimitHeaders(response, rateLimitHeaders) {
+  for (const [name, value] of Object.entries(rateLimitHeaders)) {
+    response.headers.set(name, value);
+  }
+
+  return response;
+}
+
+export function applyRateLimit(request, { limit, scope, windowMs }) {
   const now = Date.now();
   cleanupExpiredBuckets(now);
 
-  const bucketKey = getBucketKey(req, scope);
+  const bucketKey = getBucketKey(request, scope);
   const existingBucket = buckets.get(bucketKey);
   const bucket =
     existingBucket && existingBucket.resetAt > now
@@ -31,16 +48,25 @@ export function applyRateLimit(req, res, { limit, scope, windowMs }) {
   bucket.count += 1;
   buckets.set(bucketKey, bucket);
 
-  res.setHeader("X-RateLimit-Limit", String(limit));
-  res.setHeader("X-RateLimit-Remaining", String(Math.max(limit - bucket.count, 0)));
-  res.setHeader("X-RateLimit-Reset", String(Math.ceil(bucket.resetAt / 1000)));
+  const headers = buildRateLimitHeaders(bucket, limit);
 
   if (bucket.count <= limit) {
-    return true;
+    return {
+      allowed: true,
+      headers,
+      response: null,
+    };
   }
 
-  logSecurityEvent(req, "rate_limit.exceeded", { limit, scope, windowMs });
-  res.setHeader("Retry-After", String(Math.ceil((bucket.resetAt - now) / 1000)));
-  res.status(429).json({ error: "Too many requests. Please retry later." });
-  return false;
+  logSecurityEvent(request, "rate_limit.exceeded", { limit, scope, windowMs });
+
+  const response = NextResponse.json({ error: "Too many requests. Please retry later." }, { status: 429 });
+  appendRateLimitHeaders(response, headers);
+  response.headers.set("Retry-After", String(Math.ceil((bucket.resetAt - now) / 1000)));
+
+  return {
+    allowed: false,
+    headers,
+    response,
+  };
 }

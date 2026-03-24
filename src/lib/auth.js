@@ -1,65 +1,27 @@
-import { passkey } from "@better-auth/passkey";
-import { betterAuth } from "better-auth";
-import { memoryAdapter } from "better-auth/adapters/memory";
-import { nextCookies } from "better-auth/next-js";
+import { createNeonAuth } from "@neondatabase/auth/next/server";
+import { NextResponse } from "next/server";
 import { logSecurityEvent } from "./requestLogger";
 
-const FALLBACK_AUTH_SECRET = "runtracker-build-secret-change-me";
-const FALLBACK_AUTH_URL = "http://localhost:3000";
-const FALLBACK_DATABASE_URL = "postgresql://runtracker:runtracker@127.0.0.1:5432/runtracker";
+const FALLBACK_AUTH_BASE_URL = "https://example.invalid";
+const FALLBACK_COOKIE_SECRET = "runtracker-neon-auth-cookie-secret-build-only-123456";
 
 function getEnv(name) {
   const value = process.env[name];
   return typeof value === "string" ? value.trim() : "";
 }
 
-function getConfiguredAuthUrl() {
-  return getEnv("BETTER_AUTH_URL") || getEnv("URL") || FALLBACK_AUTH_URL;
-}
-
-function getConfiguredAuthUrlObject() {
-  try {
-    return new URL(getConfiguredAuthUrl());
-  } catch {
-    return new URL(FALLBACK_AUTH_URL);
-  }
-}
-
 function getConfiguredAuthBaseUrl() {
-  return getConfiguredAuthUrlObject().origin;
+  return getEnv("NEON_AUTH_BASE_URL") || FALLBACK_AUTH_BASE_URL;
 }
 
-function getDatabaseUrl() {
-  return getEnv("NETLIFY_DATABASE_URL") || getEnv("DATABASE_URL") || FALLBACK_DATABASE_URL;
-}
+function getConfiguredCookieSecret() {
+  const configuredSecret = getEnv("NEON_AUTH_COOKIE_SECRET");
 
-function hasDatabaseUrl() {
-  return Boolean(getEnv("NETLIFY_DATABASE_URL") || getEnv("DATABASE_URL"));
-}
-
-function hasConfiguredAuthSecret() {
-  return getEnv("BETTER_AUTH_SECRET") !== "";
-}
-
-function getAuthSecret() {
-  return getEnv("BETTER_AUTH_SECRET") || FALLBACK_AUTH_SECRET;
-}
-
-function getGoogleProviderConfig() {
-  const clientId = getEnv("GOOGLE_CLIENT_ID");
-  const clientSecret = getEnv("GOOGLE_CLIENT_SECRET");
-
-  if (!clientId || !clientSecret || !hasConfiguredAuthSecret()) {
-    return {};
+  if (configuredSecret.length >= 32) {
+    return configuredSecret;
   }
 
-  return {
-    google: {
-      clientId,
-      clientSecret,
-      prompt: "select_account",
-    },
-  };
+  return FALLBACK_COOKIE_SECRET;
 }
 
 function getAllowedUserEmails() {
@@ -69,98 +31,6 @@ function getAllowedUserEmails() {
       .map((value) => value.trim().toLowerCase())
       .filter(Boolean),
   );
-}
-
-function hasConfiguredAllowedEmails() {
-  return getAllowedUserEmails().size > 0;
-}
-
-function getMemoryDatabase() {
-  if (!globalThis.__runtrackerBetterAuthMemoryDb) {
-    globalThis.__runtrackerBetterAuthMemoryDb = {};
-  }
-
-  return globalThis.__runtrackerBetterAuthMemoryDb;
-}
-
-function getAuthDatabase() {
-  if (hasDatabaseUrl()) {
-    return {
-      provider: "postgres",
-      url: getDatabaseUrl(),
-    };
-  }
-
-  return memoryAdapter(getMemoryDatabase());
-}
-
-let authInstance = null;
-
-function createAuth() {
-  const authUrl = getConfiguredAuthUrlObject();
-
-  return betterAuth({
-    advanced: {
-      cookiePrefix: "runtracker",
-    },
-    basePath: "/api/auth",
-    baseURL: getConfiguredAuthBaseUrl(),
-    database: getAuthDatabase(),
-    plugins: [
-      nextCookies(),
-      passkey({
-        advanced: {
-          webAuthnChallengeCookie: "runtracker-passkey",
-        },
-        authenticatorSelection: {
-          residentKey: "preferred",
-          userVerification: "preferred",
-        },
-        origin: authUrl.origin,
-        rpID: authUrl.hostname,
-        rpName: "RunTracker",
-      }),
-    ],
-    secret: getAuthSecret(),
-    socialProviders: getGoogleProviderConfig(),
-  });
-}
-
-export function getAuth() {
-  if (!authInstance) {
-    authInstance = createAuth();
-  }
-
-  return authInstance;
-}
-
-export function isGoogleAuthConfigured() {
-  return Boolean(getEnv("GOOGLE_CLIENT_ID") && getEnv("GOOGLE_CLIENT_SECRET") && hasConfiguredAuthSecret());
-}
-
-export function getRequestHeaders(req) {
-  const headers = new Headers();
-
-  for (const [name, value] of Object.entries(req.headers ?? {})) {
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        headers.append(name, item);
-      }
-      continue;
-    }
-
-    if (typeof value === "string") {
-      headers.set(name, value);
-    }
-  }
-
-  return headers;
-}
-
-export async function getSessionFromRequest(req) {
-  return getAuth().api.getSession({
-    headers: getRequestHeaders(req),
-  });
 }
 
 function isAllowedSession(session) {
@@ -174,72 +44,113 @@ function isAllowedSession(session) {
   return email !== "" && allowedEmails.has(email);
 }
 
-export async function requireAuth(req, res) {
-  if (!hasConfiguredAuthSecret()) {
-    logSecurityEvent(req, "auth.misconfigured", { reason: "missing-better-auth-secret" });
-    res.status(500).json({ error: "Server authentication is not configured." });
-    return null;
+export function isNeonAuthConfigured() {
+  return getEnv("NEON_AUTH_BASE_URL") !== "" && getEnv("NEON_AUTH_COOKIE_SECRET").length >= 32;
+}
+
+export const auth = createNeonAuth({
+  baseUrl: getConfiguredAuthBaseUrl(),
+  cookies: {
+    secret: getConfiguredCookieSecret(),
+    sessionDataTtl: 300,
+  },
+});
+
+function getAuthenticationConfigurationError() {
+  if (getEnv("NEON_AUTH_BASE_URL") === "") {
+    return "NEON_AUTH_BASE_URL is not configured.";
   }
 
-  if (process.env.NODE_ENV !== "development" && !hasConfiguredAllowedEmails()) {
-    logSecurityEvent(req, "auth.misconfigured", { reason: "missing-allowed-user-emails" });
-    res.status(500).json({ error: "Authorized user emails are not configured for this deployment." });
-    return null;
+  if (getEnv("NEON_AUTH_COOKIE_SECRET").length < 32) {
+    return "NEON_AUTH_COOKIE_SECRET must be at least 32 characters.";
   }
 
-  const session = await getSessionFromRequest(req);
+  return "Server authentication is not configured.";
+}
+
+export async function requireAuth(request) {
+  if (!isNeonAuthConfigured()) {
+    const error = getAuthenticationConfigurationError();
+    logSecurityEvent(request, "auth.misconfigured", { error });
+
+    return {
+      response: NextResponse.json({ error }, { status: 500 }),
+      session: null,
+    };
+  }
+
+  const { data: session, error } = await auth.getSession();
+
+  if (error) {
+    logSecurityEvent(request, "auth.session_error", {
+      error: error.message || "Unknown session error",
+    });
+
+    return {
+      response: NextResponse.json({ error: "Could not verify your session." }, { status: 500 }),
+      session: null,
+    };
+  }
 
   if (!session?.user?.id) {
-    logSecurityEvent(req, "auth.required");
-    res.status(401).json({ error: "Authentication required." });
-    return null;
+    logSecurityEvent(request, "auth.required");
+
+    return {
+      response: NextResponse.json({ error: "Authentication required." }, { status: 401 }),
+      session: null,
+    };
   }
 
   if (!isAllowedSession(session)) {
-    logSecurityEvent(req, "auth.forbidden", {
+    logSecurityEvent(request, "auth.forbidden", {
       email: typeof session.user.email === "string" ? session.user.email : "",
     });
-    res
-      .status(403)
-      .json({ error: "Your account is signed in, but it is not allowed to access this app." });
-    return null;
+
+    return {
+      response: NextResponse.json(
+        { error: "Your account is signed in, but it is not allowed to access this app." },
+        { status: 403 },
+      ),
+      session: null,
+    };
   }
 
-  return session;
+  return {
+    response: null,
+    session,
+  };
 }
 
-function getRequestProtocol(req) {
-  const forwardedProtocol = req.headers["x-forwarded-proto"];
+function getRequestProtocol(request) {
+  const forwardedProtocol = request.headers.get("x-forwarded-proto");
 
-  if (typeof forwardedProtocol === "string" && forwardedProtocol.trim() !== "") {
+  if (forwardedProtocol) {
     return forwardedProtocol.split(",")[0].trim();
   }
 
   return process.env.NODE_ENV === "development" ? "http" : "https";
 }
 
-export function enforceSameOrigin(req, res) {
-  const requestOrigin = req.headers.origin;
+export function enforceSameOrigin(request) {
+  const requestOrigin = request.headers.get("origin");
 
   if (!requestOrigin) {
-    return true;
+    return null;
   }
 
-  const requestHost = req.headers.host;
+  const requestHost = request.headers.get("host");
 
   if (!requestHost) {
-    logSecurityEvent(req, "origin.invalid", { reason: "missing-host" });
-    res.status(403).json({ error: "Origin validation failed." });
-    return false;
+    logSecurityEvent(request, "origin.invalid", { reason: "missing-host" });
+    return NextResponse.json({ error: "Origin validation failed." }, { status: 403 });
   }
 
-  const expectedOrigin = `${getRequestProtocol(req)}://${requestHost}`;
+  const expectedOrigin = `${getRequestProtocol(request)}://${requestHost}`;
 
   if (requestOrigin !== expectedOrigin) {
-    logSecurityEvent(req, "origin.invalid", { expectedOrigin, requestOrigin });
-    res.status(403).json({ error: "Origin validation failed." });
-    return false;
+    logSecurityEvent(request, "origin.invalid", { expectedOrigin, requestOrigin });
+    return NextResponse.json({ error: "Origin validation failed." }, { status: 403 });
   }
 
-  return true;
+  return null;
 }
