@@ -230,7 +230,7 @@ Notes:
 - `NEON_AUTH_BASE_URL` should be the Neon Auth endpoint, not your site URL
 - `NEON_AUTH_COOKIE_SECRET` must be at least 32 characters
 - if `ALLOWED_USER_EMAILS` is omitted, any user allowed by Neon Auth can access the app
-- old auth envs like `BETTER_AUTH_*`, `GOOGLE_CLIENT_*`, `RUNTRACKER_ADMIN_TOKEN`, and Supabase env vars are no longer used
+- old auth envs like `BETTER_AUTH_*`, `GOOGLE_CLIENT_*`, and `RUNTRACKER_ADMIN_TOKEN` are no longer used
 
 ## Database setup
 
